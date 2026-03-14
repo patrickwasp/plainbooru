@@ -1,0 +1,28 @@
+# PHP
+/vendor/
+
+# Node
+/node_modules/
+
+# Environment
+/.env
+
+# SQLite database
+/data/*.sqlite
+/data/*.sqlite-shm
+/data/*.sqlite-wal
+
+# Uploaded files (don't commit user content)
+/storage/uploads/*
+/storage/thumbs/*
+!/storage/uploads/.gitkeep
+!/storage/thumbs/.gitkeep
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
