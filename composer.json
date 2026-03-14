@@ -1,0 +1,21 @@
+{
+    "name": "patrickwasp/plainbooru",
+    "description": "A minimal image/video booru board built with Slim 4, SQLite, and zero client-side JavaScript",
+    "type": "project",
+    "license": "MIT",
+    "require": {
+        "php": ">=8.2",
+        "slim/slim": "^4.14",
+        "slim/psr7": "^1.7",
+        "php-di/php-di": "^7.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Plainbooru\\": "src/"
+        }
+    },
+    "config": {
+        "optimize-autoloader": true,
+        "sort-packages": true
+    }
+}

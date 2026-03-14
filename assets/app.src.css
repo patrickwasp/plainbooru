@@ -1,0 +1,4 @@
+@import "tailwindcss";
+@source "../templates/**/*.php";
+@source "../src/**/*.php";
+@import "basecoat-css";

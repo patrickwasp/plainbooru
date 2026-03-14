@@ -1,0 +1,13 @@
+{
+  "name": "plainbooru-css",
+  "private": true,
+  "scripts": {
+    "build:css": "npx @tailwindcss/cli -i ./assets/app.src.css -o ./public/assets/app.css --minify",
+    "watch:css": "npx @tailwindcss/cli -i ./assets/app.src.css -o ./public/assets/app.css --watch"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.1.0",
+    "basecoat-css": "^0.3.11",
+    "tailwindcss": "^4.1.0"
+  }
+}
