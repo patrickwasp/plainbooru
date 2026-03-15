@@ -64,5 +64,11 @@ final class Migrations
             CREATE INDEX IF NOT EXISTS idx_pool_tags_pool_id   ON pool_tags(pool_id);
             CREATE INDEX IF NOT EXISTS idx_pools_created_at   ON pools(created_at DESC);
         SQL);
+
+        // Additive column migrations (safe to run on every boot)
+        $cols = array_column($pdo->query('PRAGMA table_info(media)')->fetchAll(), 'name');
+        if (!in_array('animated', $cols, true)) {
+            $pdo->exec('ALTER TABLE media ADD COLUMN animated INTEGER NOT NULL DEFAULT 0');
+        }
     }
 }

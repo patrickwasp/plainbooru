@@ -66,14 +66,16 @@ final class MediaService
             $duration = self::extractDuration($destPath);
         }
 
+        $animated = ($kind === 'image' && $ext === 'gif' && self::isAnimatedGif($destPath)) ? 1 : 0;
+
         $now  = date('c');
         $stmt = $pdo->prepare(<<<'SQL'
             INSERT INTO media (kind, sha256, original_name, stored_name, mime, ext, size_bytes,
-                               width, height, duration_seconds, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                               width, height, duration_seconds, animated, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         SQL);
         $stmt->execute([$kind, $sha256, $origName, $storedName, $mime, $ext, $size,
-                        $width, $height, $duration, $now]);
+                        $width, $height, $duration, $animated, $now]);
         $id = (int)$pdo->lastInsertId();
 
         ThumbService::generate($storedName, $mime, $id);
@@ -151,14 +153,16 @@ final class MediaService
             $duration = self::extractDuration($destPath);
         }
 
+        $animated = ($kind === 'image' && $ext === 'gif' && self::isAnimatedGif($destPath)) ? 1 : 0;
+
         $now = date('c');
         $stmt = $pdo->prepare(<<<'SQL'
             INSERT INTO media (kind, sha256, original_name, stored_name, mime, ext, size_bytes,
-                               width, height, duration_seconds, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                               width, height, duration_seconds, animated, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         SQL);
         $stmt->execute([$kind, $sha256, $origName, $storedName, $mime, $ext, $size,
-                        $width, $height, $duration, $now]);
+                        $width, $height, $duration, $animated, $now]);
         $id = (int)$pdo->lastInsertId();
 
         // Generate thumbnail
@@ -195,21 +199,77 @@ final class MediaService
         $pdo    = Db::get();
         $offset = ($page - 1) * $pageSize;
 
-        $tagList = self::parseTags($tags);
-        $params  = [];
-        $where   = ['1=1'];
+        $parsed   = self::parseSearchQuery($tags);
+        $required = $parsed['required'];
+        $excluded = $parsed['excluded'];
+        $union    = $parsed['union'];
 
-        if ($tagList) {
-            foreach ($tagList as $i => $tag) {
-                $where[] = "m.id IN (SELECT mt.media_id FROM media_tags mt
-                                      JOIN tags t ON t.id = mt.tag_id
-                                      WHERE t.name = :tag$i)";
-                $params[":tag$i"] = $tag;
+        $params = [];
+        $where  = ['1=1'];
+
+        // Required: each token must match (AND). Virtual tags become direct SQL; real tags use subquery.
+        foreach ($required as $i => $token) {
+            $vsql = self::virtualTagSql($token);
+            if ($vsql !== null) {
+                $where[] = $vsql;
+            } else {
+                $name = self::normalizeTagName($token);
+                if ($name !== '') {
+                    $where[]         = "m.id IN (SELECT mt.media_id FROM media_tags mt
+                                                  JOIN tags t ON t.id = mt.tag_id
+                                                  WHERE t.name = :req$i)";
+                    $params[":req$i"] = $name;
+                }
+            }
+        }
+
+        // Union: at least one must match (OR). Mixes virtual SQL and real tag IN().
+        if ($union) {
+            $unionSqls     = [];
+            $realUnionTags = [];
+            foreach ($union as $i => $token) {
+                $vsql = self::virtualTagSql($token);
+                if ($vsql !== null) {
+                    $unionSqls[] = $vsql;
+                } else {
+                    $name = self::normalizeTagName($token);
+                    if ($name !== '') {
+                        $realUnionTags[":union$i"] = $name;
+                    }
+                }
+            }
+            if ($realUnionTags) {
+                $in = implode(', ', array_keys($realUnionTags));
+                foreach ($realUnionTags as $k => $v) {
+                    $params[$k] = $v;
+                }
+                $unionSqls[] = "m.id IN (SELECT mt.media_id FROM media_tags mt
+                                          JOIN tags t ON t.id = mt.tag_id
+                                          WHERE t.name IN ($in))";
+            }
+            if ($unionSqls) {
+                $where[] = '(' . implode(' OR ', $unionSqls) . ')';
+            }
+        }
+
+        // Excluded: must not match (NOT).
+        foreach ($excluded as $i => $token) {
+            $vsql = self::virtualTagSql($token);
+            if ($vsql !== null) {
+                $where[] = "NOT ($vsql)";
+            } else {
+                $name = self::normalizeTagName($token);
+                if ($name !== '') {
+                    $where[]         = "m.id NOT IN (SELECT mt.media_id FROM media_tags mt
+                                                      JOIN tags t ON t.id = mt.tag_id
+                                                      WHERE t.name = :exc$i)";
+                    $params[":exc$i"] = $name;
+                }
             }
         }
 
         if ($q !== '') {
-            $where[] = "m.original_name LIKE :q";
+            $where[]      = "m.original_name LIKE :q";
             $params[':q'] = '%' . $q . '%';
         }
 
@@ -229,6 +289,160 @@ final class MediaService
         $rows = $stmt->fetchAll();
 
         return ['total' => $total, 'results' => $rows, 'page' => $page, 'page_size' => $pageSize];
+    }
+
+    /**
+     * Parse a search query string into required, excluded, and union token sets.
+     * Tokens are returned raw (not normalized) so virtual tags like width:>2000 survive.
+     * - plain token → required (AND)
+     * - -token      → excluded (NOT)
+     * - ~token      → union    (OR)
+     */
+    public static function parseSearchQuery(string $input): array
+    {
+        $tokens   = preg_split('/\s+/', trim($input), -1, PREG_SPLIT_NO_EMPTY);
+        $required = [];
+        $excluded = [];
+        $union    = [];
+
+        foreach ($tokens as $token) {
+            if (str_starts_with($token, '-')) {
+                $raw = substr($token, 1);
+                if ($raw !== '') {
+                    $excluded[] = $raw;
+                }
+            } elseif (str_starts_with($token, '~')) {
+                $raw = substr($token, 1);
+                if ($raw !== '') {
+                    $union[] = $raw;
+                }
+            } else {
+                if ($token !== '') {
+                    $required[] = $token;
+                }
+            }
+        }
+
+        // If the first token was a plain tag and union tags exist, promote it to union
+        // so that "sunset ~dawn ..." means "(sunset OR dawn) AND ..."
+        if ($union && $required && $tokens && !str_starts_with($tokens[0], '-')) {
+            $first = ltrim($tokens[0], '~');
+            if (in_array($first, $required, true)) {
+                $required = array_values(array_filter($required, fn($t) => $t !== $first));
+                array_unshift($union, $first);
+            }
+        }
+
+        return [
+            'required' => array_unique($required),
+            'excluded' => array_unique($excluded),
+            'union'    => array_unique($union),
+        ];
+    }
+
+    /**
+     * Returns a SQL expression (using 'm.' prefix) for intrinsic/virtual tags,
+     * or null if the token is a regular tag to look up in the tags table.
+     */
+    private static function virtualTagSql(string $token): ?string
+    {
+        $t = strtolower($token);
+
+        return match($t) {
+            'video'     => "m.kind = 'video'",
+            'image'     => "m.kind = 'image'",
+            'animated'  => "m.animated = 1",
+            'landscape' => "m.width IS NOT NULL AND m.width > m.height",
+            'portrait'  => "m.height IS NOT NULL AND m.height > m.width",
+            'square'    => "m.width IS NOT NULL AND m.width = m.height",
+            'highres'   => "(m.width >= 3000 OR m.height >= 3000)",
+            'lowres'    => "(m.width IS NOT NULL AND m.width < 1280 AND m.height < 1280)",
+            'short'     => "m.duration_seconds IS NOT NULL AND m.duration_seconds < 10",
+            'long'      => "m.duration_seconds IS NOT NULL AND m.duration_seconds > 60",
+            default     => self::parseMetaTag($token),
+        };
+    }
+
+    /**
+     * Parses parameterized meta-tags: width:>2000, duration:<30, filesize:>10mb,
+     * date:2024, date:>2024-01-01, date:2024-01-01..2024-02-01
+     */
+    private static function parseMetaTag(string $token): ?string
+    {
+        if (!preg_match('/^(width|height|duration|filesize|date):(.+)$/i', $token, $m)) {
+            return null;
+        }
+
+        $field = strtolower($m[1]);
+        $value = $m[2];
+
+        $col = match($field) {
+            'width'    => 'm.width',
+            'height'   => 'm.height',
+            'duration' => 'm.duration_seconds',
+            'filesize' => 'm.size_bytes',
+            'date'     => 'm.created_at',
+        };
+
+        // Date: special handling
+        if ($field === 'date') {
+            $dp = '\d{4}(?:-\d{2}(?:-\d{2})?)?';
+            // range: date:2024-01-01..2024-02-01
+            if (preg_match("/^($dp)\.\.($dp)$/", $value, $r)) {
+                return "$col >= '$r[1]' AND $col <= '$r[2]T23:59:59'";
+            }
+            // comparison: date:>2024-01-01 or date:<2024-01-01
+            if (preg_match("/^([><])($dp)$/", $value, $r)) {
+                return "$col $r[1] '$r[2]'";
+            }
+            // exact prefix: date:2024 or date:2024-01 or date:2024-01-15
+            if (preg_match("/^($dp)$/", $value, $r)) {
+                return "$col LIKE '$r[1]%'";
+            }
+            return null;
+        }
+
+        // Numeric fields: width, height, duration, filesize
+        if (!preg_match('/^([><]=?|=?)(.+)$/', $value, $r)) {
+            return null;
+        }
+        $op  = $r[1] !== '' ? $r[1] : '=';
+        $raw = $r[2];
+
+        if ($field === 'filesize') {
+            $bytes = self::parseFileSize($raw);
+            if ($bytes === null) {
+                return null;
+            }
+            return "$col $op $bytes";
+        }
+
+        if (!is_numeric($raw)) {
+            return null;
+        }
+        return "$col $op " . (float)$raw;
+    }
+
+    private static function parseFileSize(string $s): ?int
+    {
+        if (!preg_match('/^(\d+(?:\.\d+)?)(b|kb|mb|gb)?$/i', $s, $m)) {
+            return null;
+        }
+        $n    = (float)$m[1];
+        $unit = strtolower($m[2] ?? 'b');
+        return (int)match($unit) {
+            'kb'    => $n * 1024,
+            'mb'    => $n * 1024 ** 2,
+            'gb'    => $n * 1024 ** 3,
+            default => $n,
+        };
+    }
+
+    private static function isAnimatedGif(string $path): bool
+    {
+        // Count Graphic Control Extension markers — one appears per frame in an animated GIF
+        $data = file_get_contents($path, false, null, 0, 524288);
+        return $data !== false && substr_count($data, "\x21\xF9\x04") > 1;
     }
 
     public static function getByTag(string $tag, int $page = 1, int $pageSize = 20): array
@@ -358,16 +572,19 @@ final class MediaService
         $raw  = preg_split('/[,\n]+/', trim($input), -1, PREG_SPLIT_NO_EMPTY);
         $tags = [];
         foreach ($raw as $t) {
-            // Replace any non-alphanumeric characters (including spaces, hyphens, etc.) with _
-            $normalized = strtolower(preg_replace('/[^a-z0-9]+/i', '_', $t));
-            // Collapse multiple underscores and strip leading/trailing underscores
-            $normalized = preg_replace('/_+/', '_', $normalized);
-            $normalized = trim($normalized, '_');
+            $normalized = self::normalizeTagName($t);
             if ($normalized !== '') {
                 $tags[] = $normalized;
             }
         }
         return array_unique($tags);
+    }
+
+    private static function normalizeTagName(string $t): string
+    {
+        $normalized = strtolower(preg_replace('/[^a-z0-9]+/i', '_', trim($t)));
+        $normalized = preg_replace('/_+/', '_', $normalized);
+        return trim($normalized, '_');
     }
 
     private static function extractDuration(string $path): ?float

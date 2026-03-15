@@ -7,7 +7,7 @@
   <title><?= $this->e($title ?? 'plainbooru') ?></title>
   <link rel="stylesheet" href="/assets/app.css?v=<?= filemtime($_SERVER['DOCUMENT_ROOT'] . '/assets/app.css') ?>">
 </head>
-<body class="min-h-full bg-background text-foreground flex flex-col <?= $this->e($bodyClass ?? '') ?>">
+<body class="<?= isset($sidebar) ? 'h-full overflow-hidden' : 'min-h-full' ?> bg-background text-foreground flex flex-col <?= $this->e($bodyClass ?? '') ?>">
 
   <!-- Navbar -->
   <header class="sticky top-0 z-50 w-full border-b border-border bg-background/95 backdrop-blur">
@@ -19,7 +19,7 @@
         <a href="/upload" class="btn-ghost text-sm px-3 py-1 rounded-md hover:bg-accent">Upload</a>
       </nav>
       <form action="/search" method="get" class="flex gap-1 ml-auto">
-        <input type="text" name="tags" placeholder="Search tags" class="input w-36 md:w-48 h-8 text-sm px-3">
+        <input type="text" name="tags" placeholder="Search tags" value="<?= $this->e(is_string($tags ?? null) ? $tags : '') ?>" class="input w-44 md:w-64 h-8 text-sm px-3">
         <button type="submit" class="btn-sm-primary">Go</button>
       </form>
       <form action="/theme" method="post">
@@ -45,11 +45,11 @@
 
   <!-- Content -->
   <?php if (isset($sidebar)): ?>
-  <main class="flex-1 flex overflow-hidden">
-    <div class="flex-1 overflow-y-auto px-4 py-6">
+  <main class="flex-1 min-h-0 flex overflow-hidden">
+    <div class="flex-1 min-w-0 overflow-y-auto px-4 py-6">
       <?= $content ?>
     </div>
-    <aside class="w-64 shrink-0 border-l border-border flex flex-col">
+    <aside class="w-64 shrink-0 border-l border-border flex flex-col overflow-y-auto">
       <?= $sidebar ?>
     </aside>
   </main>

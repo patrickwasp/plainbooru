@@ -42,7 +42,7 @@ final class App
         $app->get('/', function (Request $req, Response $resp) use ($renderer) {
             $params   = $req->getQueryParams();
             $page     = max(1, (int)($params['page'] ?? 1));
-            $pageSize = 20;
+            $pageSize = 18;
             $data     = MediaService::getList($page, $pageSize);
             $sidebar  = $renderer->partial('sidebar_tags', [
                 'sidebar_tags' => MediaService::getPopularTags(20),
@@ -196,7 +196,7 @@ final class App
             $tags     = $params['tags'] ?? '';
             $q        = $params['q'] ?? '';
             $page     = max(1, (int)($params['page'] ?? 1));
-            $pageSize = 20;
+            $pageSize = 18;
             $data     = MediaService::search($tags, $q, $page, $pageSize);
             $mediaIds = array_column($data['results'], 'id');
             $sidebar  = $renderer->partial('sidebar_tags', [
@@ -231,7 +231,7 @@ final class App
             $tag      = $args['tag'];
             $params   = $req->getQueryParams();
             $page     = max(1, (int)($params['page'] ?? 1));
-            $pageSize = 20;
+            $pageSize = 18;
             $data     = MediaService::getByTag($tag, $page, $pageSize);
             $mediaIds = array_column($data['results'], 'id');
             $sidebar  = $renderer->partial('sidebar_tags', [
@@ -291,14 +291,14 @@ final class App
         $app->get('/pools', function (Request $req, Response $resp) use ($renderer) {
             $params  = $req->getQueryParams();
             $page    = max(1, (int)($params['page'] ?? 1));
-            $data    = PoolService::getList($page, 20);
+            $data    = PoolService::getList($page, 18);
             $sidebar = $renderer->partial('sidebar_create_pool', ['error' => null]);
             $html    = $renderer->render('pools', [
                 'title'     => 'Pools – plainbooru',
                 'pools'     => $data['results'],
                 'total'     => $data['total'],
                 'page'      => $page,
-                'page_size' => 20,
+                'page_size' => 18,
                 'error'     => null,
                 'sidebar'   => $sidebar,
             ]);
@@ -316,14 +316,14 @@ final class App
                 $pool = PoolService::create($name, $desc);
                 return $resp->withStatus(302)->withHeader('Location', '/pools/' . $pool['id'] . '/edit');
             } catch (\RuntimeException $e) {
-                $data    = PoolService::getList(1, 20);
+                $data    = PoolService::getList(1, 18);
                 $sidebar = $renderer->partial('sidebar_create_pool', ['error' => $e->getMessage()]);
                 $html    = $renderer->render('pools', [
                     'title'     => 'Pools – plainbooru',
                     'pools'     => $data['results'],
                     'total'     => $data['total'],
                     'page'      => 1,
-                    'page_size' => 20,
+                    'page_size' => 18,
                     'error'     => $e->getMessage(),
                     'sidebar'   => $sidebar,
                 ]);
@@ -340,10 +340,19 @@ final class App
                 $resp->getBody()->write($html);
                 return $resp->withStatus(404)->withHeader('Content-Type', 'text/html; charset=utf-8');
             }
+            $params     = $req->getQueryParams();
+            $searchTags = trim($params['search_tags'] ?? '');
+            $searchPage = max(1, (int)($params['search_page'] ?? 1));
+            $searchData = $searchTags !== '' ? MediaService::search($searchTags, '', $searchPage, 24) : null;
+            $poolItemIds = array_column($pool['items'] ?? [], 'id');
             $html = $renderer->render('pool_edit', [
-                'title' => 'Edit: ' . $pool['name'] . ' – plainbooru',
-                'pool'  => $pool,
-                'error' => null,
+                'title'        => 'Edit: ' . $pool['name'] . ' – plainbooru',
+                'pool'         => $pool,
+                'error'        => null,
+                'search_tags'  => $searchTags,
+                'search_page'  => $searchPage,
+                'search_data'  => $searchData,
+                'pool_item_ids' => $poolItemIds,
             ]);
             $resp->getBody()->write($html);
             return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
@@ -512,6 +521,19 @@ final class App
             return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
         });
 
+        // POST /pools/{id}/media-search – redirect to edit page with search params + anchor
+        $app->post('/pools/{id:[0-9]+}/media-search', function (Request $req, Response $resp, array $args) {
+            $poolId     = (int)$args['id'];
+            $params     = $req->getParsedBody();
+            $searchTags = trim($params['search_tags'] ?? '');
+            $location   = '/pools/' . $poolId . '/edit';
+            if ($searchTags !== '') {
+                $location .= '?' . http_build_query(['search_tags' => $searchTags]);
+            }
+            $location .= '#add-media';
+            return $resp->withStatus(302)->withHeader('Location', $location);
+        });
+
         // POST /pools/{id}/items
         $app->post('/pools/{id:[0-9]+}/items', function (Request $req, Response $resp, array $args) use ($renderer) {
             self::requireAdmin($req);
@@ -527,7 +549,11 @@ final class App
                 $resp->getBody()->write($html);
                 return $resp->withStatus(400)->withHeader('Content-Type', 'text/html; charset=utf-8');
             }
-            return $resp->withStatus(302)->withHeader('Location', '/pools/' . $poolId . '/edit');
+            $return = trim($params['return'] ?? '');
+            if ($return === '' || !str_starts_with($return, '/') || str_starts_with($return, '//')) {
+                $return = '/pools/' . $poolId . '/edit';
+            }
+            return $resp->withStatus(302)->withHeader('Location', $return);
         });
 
         // POST /pools/{id}/reorder
@@ -683,7 +709,7 @@ final class App
             $tags     = $params['tags'] ?? '';
             $q        = $params['q'] ?? '';
             $page     = max(1, (int)($params['page'] ?? 1));
-            $pageSize = min(100, max(1, (int)($params['page_size'] ?? 20)));
+            $pageSize = min(100, max(1, (int)($params['page_size'] ?? 18)));
             $data     = MediaService::search($tags, $q, $page, $pageSize);
 
             $results = array_map([self::class, 'mediaResource'], $data['results']);
@@ -713,7 +739,7 @@ final class App
         $app->get('/api/v1/pools', function (Request $req, Response $resp) {
             $params   = $req->getQueryParams();
             $page     = max(1, (int)($params['page'] ?? 1));
-            $pageSize = min(100, max(1, (int)($params['page_size'] ?? 20)));
+            $pageSize = min(100, max(1, (int)($params['page_size'] ?? 18)));
             $data     = PoolService::getList($page, $pageSize);
             $results  = array_map([self::class, 'poolResource'], $data['results']);
             return self::jsonResp($resp, [

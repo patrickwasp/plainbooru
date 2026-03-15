@@ -12,10 +12,10 @@
       <a href="/pools/<?= (int)$pool['id'] ?>/m/<?= (int)$item['id'] ?>" class="relative block rounded overflow-hidden hover:opacity-90 transition-opacity group">
         <div class="aspect-square bg-muted overflow-hidden">
           <img src="/thumb/<?= (int)$item['id'] ?>" alt="Post #<?= (int)$item['id'] ?>"
-               class="w-full h-full object-cover group-hover:scale-105 transition-transform" loading="lazy">
+               class="w-full h-full object-cover" loading="lazy">
         </div>
         <?php if (($item['kind'] ?? '') === 'video'): ?>
-          <span class="absolute top-1 right-1 badge text-xs bg-black/70 text-white border-0">▶</span>
+          <span class="absolute top-1 left-1 bg-black/65 text-white text-xs w-5 h-5 flex items-center justify-center rounded leading-none pointer-events-none">▶</span>
         <?php endif; ?>
       </a>
     <?php endforeach; ?>

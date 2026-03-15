@@ -88,8 +88,8 @@
 
     <?= $this->partial('upload_forms', [
         'action'       => '/pools/' . (int)$pool['id'] . '/upload',
-        'button_files' => 'Upload &amp; Add to Pool',
-        'button_dir'   => 'Upload Directory &amp; Add to Pool',
+        'button_files' => 'Upload and Add to Pool',
+        'button_dir'   => 'Upload Directory and Add to Pool',
     ]) ?>
   </section>
 
@@ -112,6 +112,11 @@
                        class="w-full h-full object-cover hover:opacity-90 transition-opacity" loading="lazy">
                 </div>
               </a>
+
+              <!-- Video badge – top left -->
+              <?php if (($item['kind'] ?? '') === 'video'): ?>
+                <span class="absolute top-1 left-1 bg-black/65 text-white text-xs w-5 h-5 flex items-center justify-center rounded leading-none pointer-events-none">▶</span>
+              <?php endif; ?>
 
               <!-- Delete – top right -->
               <form action="/pools/<?= (int)$pool['id'] ?>/remove" method="post" class="absolute top-1 right-1">
@@ -149,22 +154,90 @@
       </div>
     </section>
   <?php else: ?>
-    <?= $this->partial('alert', ['title' => 'No items yet', 'body' => 'Upload media above or add by ID below.']) ?>
+    <?= $this->partial('alert', ['title' => 'No items yet', 'body' => 'Upload media above or search and add below.']) ?>
   <?php endif; ?>
 
-  <!-- Add Existing Media by ID -->
-  <section class="card shadow-sm overflow-hidden p-0 gap-0">
+  <!-- Search & Add Media -->
+  <section id="add-media" class="card shadow-sm overflow-hidden p-0 gap-0 scroll-mt-28 md:scroll-mt-16">
     <div class="flex items-center gap-2 px-5 py-3 border-b border-border bg-muted/30">
-      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-muted-foreground shrink-0"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
-      <h2 class="text-sm font-semibold">Add Existing Media by ID</h2>
+      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-muted-foreground shrink-0"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+      <h2 class="text-sm font-semibold">Search &amp; Add Media</h2>
     </div>
-    <form action="/pools/<?= (int)$pool['id'] ?>/items" method="post" class="flex flex-wrap gap-3 items-end p-5">
-      <div class="flex flex-col gap-1.5">
-        <label class="text-sm font-medium">Media ID</label>
-        <input type="number" name="media_id" required min="1" placeholder="42" class="input h-9 text-sm w-28">
-      </div>
-      <button type="submit" class="btn-sm-primary">Add to Pool</button>
-    </form>
+    <div class="p-5 flex flex-col gap-4">
+
+      <!-- Search form -->
+      <form action="/pools/<?= (int)$pool['id'] ?>/media-search" method="post" class="flex gap-2">
+        <input type="text" name="search_tags"
+               value="<?= $this->e($search_tags ?? '') ?>"
+               placeholder="Search by tags…"
+               class="input h-9 text-sm flex-1">
+        <button type="submit" class="btn-sm-outline">Search</button>
+      </form>
+
+      <?php if (($search_data ?? null) !== null): ?>
+        <?php if (empty($search_data['results'])): ?>
+          <p class="text-sm text-muted-foreground">No results for "<?= $this->e($search_tags) ?>".</p>
+        <?php else: ?>
+          <p class="text-xs text-muted-foreground">
+            <?= number_format($search_data['total']) ?> result<?= $search_data['total'] !== 1 ? 's' : '' ?> for
+            <strong><?= $this->e($search_tags) ?></strong>
+          </p>
+          <?php
+            $poolItemSet = array_flip($pool_item_ids ?? []);
+            $returnUrl   = '/pools/' . (int)$pool['id'] . '/edit?'
+                         . http_build_query(['search_tags' => $search_tags ?? '', 'search_page' => $search_page ?? 1])
+                         . '#add-media';
+          ?>
+          <div class="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2.5">
+            <?php foreach ($search_data['results'] as $item): ?>
+              <?php $inPool = isset($poolItemSet[$item['id']]); ?>
+              <div class="relative rounded-md overflow-hidden ring-1 ring-border">
+                <a href="/m/<?= (int)$item['id'] ?>">
+                  <div class="aspect-square bg-muted overflow-hidden">
+                    <img src="/thumb/<?= (int)$item['id'] ?>" alt="Post #<?= (int)$item['id'] ?>"
+                         class="w-full h-full object-cover hover:opacity-90 transition-opacity" loading="lazy">
+                  </div>
+                </a>
+                <?php if (($item['kind'] ?? '') === 'video'): ?>
+                  <span class="absolute top-1 left-1 bg-black/65 text-white text-xs w-5 h-5 flex items-center justify-center rounded leading-none pointer-events-none">▶</span>
+                <?php endif; ?>
+                <?php if ($inPool): ?>
+                  <div class="absolute top-1 right-1 bg-black/65 text-white w-5 h-5 flex items-center justify-center rounded" title="Already in pool">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+                  </div>
+                <?php else: ?>
+                  <form action="/pools/<?= (int)$pool['id'] ?>/items" method="post" class="absolute top-1 right-1">
+                    <input type="hidden" name="media_id" value="<?= (int)$item['id'] ?>">
+                    <input type="hidden" name="return" value="<?= $this->e($returnUrl) ?>">
+                    <button type="submit" title="Add to pool"
+                            class="bg-black/65 text-white w-5 h-5 flex items-center justify-center rounded leading-none hover:bg-primary transition-colors">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+                    </button>
+                  </form>
+                <?php endif; ?>
+              </div>
+            <?php endforeach; ?>
+          </div>
+
+          <!-- Pagination -->
+          <?php $totalPages = (int)ceil($search_data['total'] / 24); ?>
+          <?php if ($totalPages > 1): ?>
+            <div class="flex items-center gap-2 justify-center text-sm">
+              <?php if (($search_page ?? 1) > 1): ?>
+                <a href="/pools/<?= (int)$pool['id'] ?>/edit?<?= $this->e(http_build_query(['search_tags' => $search_tags ?? '', 'search_page' => ($search_page ?? 1) - 1])) ?>#add-media"
+                   class="btn-sm-outline">← Prev</a>
+              <?php endif; ?>
+              <span class="text-muted-foreground text-xs">Page <?= (int)($search_page ?? 1) ?> of <?= $totalPages ?></span>
+              <?php if (($search_page ?? 1) < $totalPages): ?>
+                <a href="/pools/<?= (int)$pool['id'] ?>/edit?<?= $this->e(http_build_query(['search_tags' => $search_tags ?? '', 'search_page' => ($search_page ?? 1) + 1])) ?>#add-media"
+                   class="btn-sm-outline">Next →</a>
+              <?php endif; ?>
+            </div>
+          <?php endif; ?>
+        <?php endif; ?>
+      <?php endif; ?>
+
+    </div>
   </section>
 
 </div>

@@ -4,30 +4,20 @@ $totalPages = (int)ceil($total / $page_size);
 ?>
 <div class="flex flex-col gap-4">
 
-  <div class="card p-4 shadow-sm">
-    <form action="/search" method="get" class="flex flex-col sm:flex-row flex-wrap gap-2 items-end">
-      <div class="flex flex-col gap-1 flex-1 min-w-[140px]">
-        <label class="text-sm font-medium" for="tags-input">Tags</label>
-        <input type="text" id="tags-input" name="tags" value="<?= $this->e($tags) ?>"
-               placeholder="cat blue_eyes" class="input h-8 text-sm w-full">
-      </div>
-      <div class="flex flex-col gap-1 flex-1 min-w-[140px]">
-        <label class="text-sm font-medium" for="q-input">Filename / Source</label>
-        <input type="text" id="q-input" name="q" value="<?= $this->e($q) ?>"
-               placeholder="keyword" class="input h-8 text-sm w-full">
-      </div>
-      <div class="flex gap-2 items-end">
-        <button type="submit" class="btn-sm-primary">Search</button>
-        <a href="/search" class="btn-sm-outline">Reset</a>
-      </div>
-    </form>
-  </div>
-
   <?php if (!empty($tags) || !empty($q)): ?>
-    <div class="flex items-center gap-2 text-sm text-muted-foreground">
+    <?php $parsed = \Plainbooru\Media\MediaService::parseSearchQuery($tags); ?>
+    <div class="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
       <span class="badge"><?= $total ?></span>
       result<?= $total !== 1 ? 's' : '' ?>
-      <?= !empty($tags) ? ' for tags: <strong>' . $this->e($tags) . '</strong>' : '' ?>
+      <?php foreach ($parsed['required'] as $t): ?>
+        <span class="badge"><?= $this->e($t) ?></span>
+      <?php endforeach; ?>
+      <?php foreach ($parsed['union'] as $t): ?>
+        <span class="badge bg-blue-500/10 text-blue-700 dark:text-blue-300">~<?= $this->e($t) ?></span>
+      <?php endforeach; ?>
+      <?php foreach ($parsed['excluded'] as $t): ?>
+        <span class="badge bg-red-500/10 text-red-700 dark:text-red-300">-<?= $this->e($t) ?></span>
+      <?php endforeach; ?>
       <?= !empty($q) ? ' matching: <strong>' . $this->e($q) . '</strong>' : '' ?>
     </div>
   <?php endif; ?>
@@ -40,10 +30,10 @@ $totalPages = (int)ceil($total / $page_size);
         <a href="/m/<?= (int)$m['id'] ?>" class="relative block rounded overflow-hidden hover:opacity-90 transition-opacity group">
           <div class="aspect-square bg-muted overflow-hidden">
             <img src="/thumb/<?= (int)$m['id'] ?>" alt="Post #<?= (int)$m['id'] ?>"
-                 class="w-full h-full object-cover group-hover:scale-105 transition-transform" loading="lazy">
+                 class="w-full h-full object-cover" loading="lazy">
           </div>
           <?php if (($m['kind'] ?? '') === 'video'): ?>
-            <span class="absolute top-1 right-1 badge text-xs bg-black/70 text-white border-0">▶ video</span>
+            <span class="absolute top-1 left-1 bg-black/65 text-white text-xs w-5 h-5 flex items-center justify-center rounded leading-none pointer-events-none">▶</span>
           <?php endif; ?>
         </a>
       <?php endforeach; ?>
