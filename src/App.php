@@ -164,6 +164,17 @@ final class App
             }
         });
 
+        // GET /settings
+        $app->get('/settings', function (Request $req, Response $resp) use ($renderer) {
+            $user = UserService::current();
+            if (!$user) {
+                return $resp->withStatus(302)->withHeader('Location', '/login?next=/settings');
+            }
+            $html = $renderer->render('settings', ['title' => 'Settings – plainbooru']);
+            $resp->getBody()->write($html);
+            return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
+        });
+
         // POST /logout
         $app->post('/logout', function (Request $req, Response $resp) {
             UserService::logout();
