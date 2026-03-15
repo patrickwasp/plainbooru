@@ -6,7 +6,6 @@
     "require": {
         "php": ">=8.2",
         "php-di/php-di": "^7.1.1",
-        "picocss/pico": "^2.1",
         "slim/psr7": "^1.8",
         "slim/slim": "^4.15.1",
         "twig/twig": "^3.23"

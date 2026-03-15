@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Plainbooru;
 
+use Plainbooru\Auth\UserService;
 use Plainbooru\Db;
 use Plainbooru\Media\MediaService;
 use Plainbooru\Media\ThumbService;
@@ -21,6 +22,14 @@ final class App
     public static function create(): SlimApp
     {
         Config::load();
+
+        if (session_status() === PHP_SESSION_NONE) {
+            session_start([
+                'cookie_httponly' => true,
+                'cookie_samesite' => 'Lax',
+                'use_strict_mode' => true,
+            ]);
+        }
 
         $app = AppFactory::create();
         $app->addErrorMiddleware(true, true, true);
@@ -74,6 +83,91 @@ final class App
                 'httponly' => false,
             ]);
             return $resp->withStatus(302)->withHeader('Location', $return);
+        });
+
+        // GET /login
+        $app->get('/login', function (Request $req, Response $resp) use ($renderer) {
+            if (UserService::current()) {
+                return $resp->withStatus(302)->withHeader('Location', '/');
+            }
+            $params = $req->getQueryParams();
+            $html = $renderer->render('login', [
+                'title'     => 'Log in – plainbooru',
+                'mainClass' => 'flex-1 flex items-center justify-center px-4 py-12',
+                'error'     => null,
+                'next'      => $params['next'] ?? '/',
+            ]);
+            $resp->getBody()->write($html);
+            return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
+        });
+
+        // POST /login
+        $app->post('/login', function (Request $req, Response $resp) use ($renderer) {
+            $params   = $req->getParsedBody();
+            $username = trim($params['username'] ?? '');
+            $password = $params['password'] ?? '';
+            $next     = $params['next'] ?? '/';
+            if (!str_starts_with($next, '/') || str_starts_with($next, '//')) {
+                $next = '/';
+            }
+            try {
+                UserService::login($username, $password);
+                return $resp->withStatus(302)->withHeader('Location', $next);
+            } catch (\RuntimeException $e) {
+                $html = $renderer->render('login', [
+                    'title'     => 'Log in – plainbooru',
+                    'mainClass' => 'flex-1 flex items-center justify-center px-4 py-12',
+                    'error'     => $e->getMessage(),
+                    'next'      => $next,
+                ]);
+                $resp->getBody()->write($html);
+                return $resp->withStatus(401)->withHeader('Content-Type', 'text/html; charset=utf-8');
+            }
+        });
+
+        // GET /signup
+        $app->get('/signup', function (Request $req, Response $resp) use ($renderer) {
+            if (UserService::current()) {
+                return $resp->withStatus(302)->withHeader('Location', '/');
+            }
+            $html = $renderer->render('signup', [
+                'title'     => 'Sign up – plainbooru',
+                'mainClass' => 'flex-1 flex items-center justify-center px-4 py-12',
+                'error'     => null,
+            ]);
+            $resp->getBody()->write($html);
+            return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
+        });
+
+        // POST /signup
+        $app->post('/signup', function (Request $req, Response $resp) use ($renderer) {
+            $params   = $req->getParsedBody();
+            $username = trim($params['username'] ?? '');
+            $password = $params['password'] ?? '';
+            $confirm  = $params['confirm'] ?? '';
+            try {
+                if ($password !== $confirm) {
+                    throw new \RuntimeException('Passwords do not match.');
+                }
+                $user = UserService::register($username, $password);
+                UserService::login($username, $password);
+                return $resp->withStatus(302)->withHeader('Location', '/');
+            } catch (\RuntimeException $e) {
+                $html = $renderer->render('signup', [
+                    'title'     => 'Sign up – plainbooru',
+                    'mainClass' => 'flex-1 flex items-center justify-center px-4 py-12',
+                    'error'     => $e->getMessage(),
+                    'username'  => $username,
+                ]);
+                $resp->getBody()->write($html);
+                return $resp->withStatus(422)->withHeader('Content-Type', 'text/html; charset=utf-8');
+            }
+        });
+
+        // POST /logout
+        $app->post('/logout', function (Request $req, Response $resp) {
+            UserService::logout();
+            return $resp->withStatus(302)->withHeader('Location', '/');
         });
 
         // GET /upload

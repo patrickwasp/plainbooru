@@ -32,6 +32,87 @@ html {
   scroll-behavior: auto;
 }
 
+/* ── details.dropdown (PicoCSS-style, no-JS) ────────────────────────────── */
+details.dropdown {
+  position: relative;
+}
+
+details.dropdown > summary {
+  cursor: pointer;
+  list-style: none;
+}
+details.dropdown > summary::-webkit-details-marker { display: none; }
+
+details.dropdown > summary + ul {
+  display: flex;
+  flex-direction: column;
+  position: absolute;
+  z-index: 200;
+  left: 0;
+  margin: 2px 0 0 0;
+  padding: 4px 0;
+  min-width: fit-content;
+  width: max-content;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background-color: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow: 0 4px 12px rgb(0 0 0 / 0.1);
+  white-space: nowrap;
+  list-style: none;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.1s ease;
+}
+
+details.dropdown > summary + ul[dir="rtl"] {
+  right: 0;
+  left: auto;
+}
+
+details.dropdown[open] > summary + ul {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Full-viewport overlay catches clicks outside to close the dropdown */
+details.dropdown[open] > summary::before {
+  content: "";
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: 199;
+  cursor: default;
+}
+
+details.dropdown > summary + ul li {
+  list-style: none;
+  margin: 0;
+  padding: 0 4px;
+}
+
+details.dropdown > summary + ul li a,
+details.dropdown > summary + ul li button {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  border-radius: calc(var(--radius) - 1px);
+  color: var(--popover-foreground);
+  font-size: 0.875rem;
+  text-align: left;
+  text-decoration: none;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font: inherit;
+}
+
+details.dropdown > summary + ul li a:hover,
+details.dropdown > summary + ul li button:hover {
+  background-color: var(--accent);
+  color: var(--accent-foreground);
+}
+
 @layer utilities {
   .media-grid {
     @apply grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3;

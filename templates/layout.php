@@ -13,10 +13,25 @@
   <header class="sticky top-0 z-50 w-full border-b border-border bg-background/95 backdrop-blur">
     <div class="container mx-auto flex h-14 max-w-7xl items-center gap-4 px-4">
       <a href="/" class="text-xl font-bold">plainbooru</a>
-      <nav class="hidden md:flex gap-1 flex-1">
+      <nav class="hidden md:flex gap-1 flex-1 items-center">
         <a href="/tags" class="btn-ghost text-sm px-3 py-1 rounded-md hover:bg-accent">Tags</a>
         <a href="/pools" class="btn-ghost text-sm px-3 py-1 rounded-md hover:bg-accent">Pools</a>
         <a href="/upload" class="btn-ghost text-sm px-3 py-1 rounded-md hover:bg-accent">Upload</a>
+        <?php if ($currentUser ?? null): ?>
+          <details class="dropdown">
+            <summary class="btn-ghost text-sm px-3 py-1 rounded-md hover:bg-accent cursor-pointer list-none"><?= $this->e($currentUser['username']) ?></summary>
+            <ul>
+              <li><a href="/settings">Settings</a></li>
+              <li>
+                <form action="/logout" method="post">
+                  <button type="submit">Log out</button>
+                </form>
+              </li>
+            </ul>
+          </details>
+        <?php else: ?>
+          <a href="/login" class="btn-ghost text-sm px-3 py-1 rounded-md hover:bg-accent">Log in</a>
+        <?php endif; ?>
       </nav>
       <form action="/search" method="get" class="flex gap-1 ml-auto">
         <input type="text" name="tags" placeholder="Search tags" value="<?= $this->e(is_string($tags ?? null) ? $tags : '') ?>" class="input w-44 md:w-64 h-8 text-sm px-3">
@@ -41,6 +56,22 @@
     <a href="/tags" class="text-xs px-2 py-1 rounded hover:bg-accent">Tags</a>
     <a href="/pools" class="text-xs px-2 py-1 rounded hover:bg-accent">Pools</a>
     <a href="/upload" class="text-xs px-2 py-1 rounded hover:bg-accent">Upload</a>
+    <span class="flex-1"></span>
+    <?php if ($currentUser ?? null): ?>
+      <details class="dropdown">
+        <summary class="text-xs px-2 py-1 rounded hover:bg-accent cursor-pointer list-none"><?= $this->e($currentUser['username']) ?></summary>
+        <ul dir="rtl">
+          <li><a href="/settings">Settings</a></li>
+          <li>
+            <form action="/logout" method="post">
+              <button type="submit">Log out</button>
+            </form>
+          </li>
+        </ul>
+      </details>
+    <?php else: ?>
+      <a href="/login" class="text-xs px-2 py-1 rounded hover:bg-accent">Log in</a>
+    <?php endif; ?>
   </div>
 
   <!-- Content -->

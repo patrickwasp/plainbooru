@@ -9,6 +9,16 @@ final class Migrations
     public static function run(\PDO $pdo): void
     {
         $pdo->exec(<<<'SQL'
+            CREATE TABLE IF NOT EXISTS users (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                username      TEXT    NOT NULL UNIQUE,
+                password_hash TEXT    NOT NULL,
+                role          TEXT    NOT NULL DEFAULT 'user',
+                created_at    TEXT    NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+
             CREATE TABLE IF NOT EXISTS media (
                 id             INTEGER PRIMARY KEY AUTOINCREMENT,
                 kind           TEXT    NOT NULL,
@@ -69,6 +79,10 @@ final class Migrations
         $cols = array_column($pdo->query('PRAGMA table_info(media)')->fetchAll(), 'name');
         if (!in_array('animated', $cols, true)) {
             $pdo->exec('ALTER TABLE media ADD COLUMN animated INTEGER NOT NULL DEFAULT 0');
+        }
+        if (!in_array('uploader_id', $cols, true)) {
+            // Nullable FK to users; enables upload ownership tracking later.
+            $pdo->exec('ALTER TABLE media ADD COLUMN uploader_id INTEGER NULL REFERENCES users(id) ON DELETE SET NULL');
         }
     }
 }

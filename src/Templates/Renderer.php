@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Plainbooru\Templates;
 
+use Plainbooru\Auth\UserService;
+
 final class Renderer
 {
     private string $templateDir;
@@ -18,7 +20,8 @@ final class Renderer
      */
     public function render(string $template, array $data = []): string
     {
-        $data['_renderer'] = $this;
+        $data['_renderer']   = $this;
+        $data['currentUser'] = UserService::current();
         $content = $this->partial($template, $data);
         $data['content'] = $content;
         return $this->partial('layout', $data);

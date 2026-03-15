@@ -9,5 +9,8 @@
     "@tailwindcss/cli": "^4.1.0",
     "basecoat-css": "^0.3.11",
     "tailwindcss": "^4.2.0"
+  },
+  "dependencies": {
+    "@picocss/pico": "^2.1.1"
   }
 }
