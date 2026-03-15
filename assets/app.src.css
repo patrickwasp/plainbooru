@@ -2,3 +2,50 @@
 @source "../templates/**/*.php";
 @source "../src/**/*.php";
 @import "basecoat-css";
+@import "./example_tweakcn_theme.css";
+
+/* CSS-only lightbox via :target */
+.lightbox {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(0, 0, 0, 0.92);
+  overflow-y: auto;
+  cursor: zoom-out;
+  text-align: center;
+}
+.lightbox:target {
+  display: block;
+}
+.lightbox a {
+  display: inline-block;
+  cursor: zoom-out;
+}
+.lightbox img {
+  max-width: 100vw;
+  height: auto;
+  display: block;
+}
+
+html {
+  scroll-behavior: auto;
+}
+
+@layer utilities {
+  .media-grid {
+    @apply grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3;
+  }
+
+  .nav-active {
+    font-weight: 500;
+    text-decoration: underline;
+    text-underline-offset: 4px;
+  }
+
+  .bc-sep::before {
+    content: "/";
+    margin-inline: 0.25rem;
+    opacity: 0.4;
+  }
+}

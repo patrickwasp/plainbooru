@@ -12,7 +12,7 @@ final class MediaService
     /**
      * Store a file that's already been moved to $tmpPath (after PSR-7 moveTo).
      */
-    public static function storeFromPath(string $tmpPath, array $fileInfo, string $tags = '', ?string $source = null): array
+    public static function storeFromPath(string $tmpPath, array $fileInfo, string $tags = ''): array
     {
         $size = filesize($tmpPath);
         if ($size === false || $size === 0) {
@@ -69,11 +69,11 @@ final class MediaService
         $now  = date('c');
         $stmt = $pdo->prepare(<<<'SQL'
             INSERT INTO media (kind, sha256, original_name, stored_name, mime, ext, size_bytes,
-                               width, height, duration_seconds, created_at, source)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                               width, height, duration_seconds, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         SQL);
         $stmt->execute([$kind, $sha256, $origName, $storedName, $mime, $ext, $size,
-                        $width, $height, $duration, $now, $source]);
+                        $width, $height, $duration, $now]);
         $id = (int)$pdo->lastInsertId();
 
         ThumbService::generate($storedName, $mime, $id);
@@ -87,7 +87,7 @@ final class MediaService
      * Returns the media row array.
      * @throws \RuntimeException on validation failure
      */
-    public static function store(array $uploadedFile, string $tags = '', ?string $source = null): array
+    public static function store(array $uploadedFile, string $tags = ''): array
     {
         // Validate size
         $size = $uploadedFile['size'] ?? 0;
@@ -154,11 +154,11 @@ final class MediaService
         $now = date('c');
         $stmt = $pdo->prepare(<<<'SQL'
             INSERT INTO media (kind, sha256, original_name, stored_name, mime, ext, size_bytes,
-                               width, height, duration_seconds, created_at, source)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                               width, height, duration_seconds, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         SQL);
         $stmt->execute([$kind, $sha256, $origName, $storedName, $mime, $ext, $size,
-                        $width, $height, $duration, $now, $source]);
+                        $width, $height, $duration, $now]);
         $id = (int)$pdo->lastInsertId();
 
         // Generate thumbnail
@@ -209,7 +209,7 @@ final class MediaService
         }
 
         if ($q !== '') {
-            $where[] = "(m.original_name LIKE :q OR m.source LIKE :q)";
+            $where[] = "m.original_name LIKE :q";
             $params[':q'] = '%' . $q . '%';
         }
 
@@ -242,9 +242,9 @@ final class MediaService
         return $pdo->query(<<<'SQL'
             SELECT t.name, COUNT(mt.media_id) AS count
             FROM tags t
-            JOIN media_tags mt ON mt.tag_id = t.id
+            LEFT JOIN media_tags mt ON mt.tag_id = t.id
             GROUP BY t.id
-            ORDER BY count DESC
+            ORDER BY count DESC, t.name ASC
         SQL)->fetchAll();
     }
 
@@ -268,9 +268,62 @@ final class MediaService
         return true;
     }
 
+    public static function removeTag(int $mediaId, string $tagName): void
+    {
+        $pdo = Db::get();
+        $pdo->prepare(<<<'SQL'
+            DELETE FROM media_tags
+            WHERE media_id = ?
+              AND tag_id = (SELECT id FROM tags WHERE name = ?)
+        SQL)->execute([$mediaId, $tagName]);
+    }
+
+    public static function deleteTag(string $tagName): bool
+    {
+        $pdo  = Db::get();
+        $stmt = $pdo->prepare('DELETE FROM tags WHERE name = ?');
+        $stmt->execute([$tagName]);
+        return $stmt->rowCount() > 0;
+    }
+
+    public static function getPopularTags(int $limit = 20): array
+    {
+        $pdo  = Db::get();
+        $stmt = $pdo->prepare(<<<'SQL'
+            SELECT t.name, COUNT(mt.media_id) AS count
+            FROM tags t
+            JOIN media_tags mt ON mt.tag_id = t.id
+            GROUP BY t.id
+            ORDER BY count DESC
+            LIMIT ?
+        SQL);
+        $stmt->execute([$limit]);
+        return $stmt->fetchAll();
+    }
+
+    public static function getTagsForMediaSet(array $mediaIds, int $limit = 30): array
+    {
+        if (empty($mediaIds)) {
+            return [];
+        }
+        $pdo          = Db::get();
+        $placeholders = implode(',', array_fill(0, count($mediaIds), '?'));
+        $stmt = $pdo->prepare(<<<SQL
+            SELECT t.name, COUNT(mt.media_id) AS count
+            FROM tags t
+            JOIN media_tags mt ON mt.tag_id = t.id
+            WHERE mt.media_id IN ($placeholders)
+            GROUP BY t.id
+            ORDER BY count DESC
+            LIMIT $limit
+        SQL);
+        $stmt->execute($mediaIds);
+        return $stmt->fetchAll();
+    }
+
     // ---- Helpers ----
 
-    private static function addTags(array $row, string $tags): array
+    public static function addTags(array $row, string $tags): array
     {
         $tagList = self::parseTags($tags);
         if ($tagList) {
@@ -301,11 +354,13 @@ final class MediaService
 
     public static function parseTags(string $input): array
     {
-        // Split on whitespace and/or commas, normalize to lowercase+underscore
-        $raw  = preg_split('/[\s,]+/', trim($input), -1, PREG_SPLIT_NO_EMPTY);
+        // Split on commas and/or newlines; spaces within a token become underscores
+        $raw  = preg_split('/[,\n]+/', trim($input), -1, PREG_SPLIT_NO_EMPTY);
         $tags = [];
         foreach ($raw as $t) {
-            $normalized = strtolower(preg_replace('/[^a-z0-9_]/i', '_', $t));
+            // Replace any non-alphanumeric characters (including spaces, hyphens, etc.) with _
+            $normalized = strtolower(preg_replace('/[^a-z0-9]+/i', '_', $t));
+            // Collapse multiple underscores and strip leading/trailing underscores
             $normalized = preg_replace('/_+/', '_', $normalized);
             $normalized = trim($normalized, '_');
             if ($normalized !== '') {

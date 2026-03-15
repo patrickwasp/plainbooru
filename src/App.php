@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Plainbooru;
 
+use Plainbooru\Db;
 use Plainbooru\Media\MediaService;
 use Plainbooru\Media\ThumbService;
 use Plainbooru\Pools\PoolService;
@@ -43,16 +44,36 @@ final class App
             $page     = max(1, (int)($params['page'] ?? 1));
             $pageSize = 20;
             $data     = MediaService::getList($page, $pageSize);
-
+            $sidebar  = $renderer->partial('sidebar_tags', [
+                'sidebar_tags' => MediaService::getPopularTags(20),
+            ]);
             $html = $renderer->render('home', [
                 'title'     => 'plainbooru',
                 'media'     => $data['results'],
                 'total'     => $data['total'],
                 'page'      => $page,
                 'page_size' => $pageSize,
+                'sidebar'   => $sidebar,
             ]);
             $resp->getBody()->write($html);
             return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
+        });
+
+        // POST /theme – toggle dark/light mode cookie
+        $app->post('/theme', function (Request $req, Response $resp) {
+            $params = $req->getParsedBody();
+            $theme  = ($params['theme'] ?? 'light') === 'dark' ? 'dark' : 'light';
+            $return = $params['return'] ?? '/';
+            if (!str_starts_with($return, '/') || str_starts_with($return, '//')) {
+                $return = '/';
+            }
+            setcookie('theme', $theme, [
+                'expires'  => time() + 60 * 60 * 24 * 365,
+                'path'     => '/',
+                'samesite' => 'Lax',
+                'httponly' => false,
+            ]);
+            return $resp->withStatus(302)->withHeader('Location', $return);
         });
 
         // GET /upload
@@ -64,46 +85,57 @@ final class App
 
         // POST /upload
         $app->post('/upload', function (Request $req, Response $resp) use ($renderer) {
-            $files  = $req->getUploadedFiles();
-            $params = $req->getParsedBody();
-            /** @var UploadedFileInterface|null $file */
-            $file = $files['file'] ?? null;
+            $allFiles = $req->getUploadedFiles();
+            $params   = $req->getParsedBody();
 
-            if (!$file || $file->getError() !== UPLOAD_ERR_OK) {
+            // Accept files[] (multi) or legacy file (single)
+            $uploaded = $allFiles['files'] ?? ($allFiles['file'] ?? []);
+            if (!is_array($uploaded)) {
+                $uploaded = [$uploaded];
+            }
+            $uploaded = array_filter($uploaded, fn($f) => $f && $f->getError() === UPLOAD_ERR_OK);
+
+            if (empty($uploaded)) {
+                $first = is_array($allFiles['files'] ?? null) ? ($allFiles['files'][0] ?? null) : ($allFiles['files'] ?? $allFiles['file'] ?? null);
                 $html = $renderer->render('upload', [
                     'title' => 'Upload – plainbooru',
-                    'error' => 'Upload failed: ' . self::uploadError($file),
+                    'error' => 'Upload failed: ' . self::uploadError($first),
                 ]);
                 $resp->getBody()->write($html);
                 return $resp->withStatus(400)->withHeader('Content-Type', 'text/html; charset=utf-8');
             }
 
-            // Move to tmp so MediaService can work with it
-            $tmpPath = tempnam(sys_get_temp_dir(), 'pb_');
-            $file->moveTo($tmpPath);
+            $errors  = [];
+            $lastId  = null;
+            foreach ($uploaded as $file) {
+                $tmpPath = tempnam(sys_get_temp_dir(), 'pb_');
+                $file->moveTo($tmpPath);
+                $phpFile = [
+                    'name'     => $file->getClientFilename(),
+                    'tmp_name' => $tmpPath,
+                    'size'     => $file->getSize(),
+                    'error'    => UPLOAD_ERR_OK,
+                ];
+                try {
+                    $media  = MediaService::storeFromPath($tmpPath, $phpFile, $params['tags'] ?? '');
+                    $lastId = $media['id'];
+                } catch (\RuntimeException $e) {
+                    $errors[] = ($file->getClientFilename() ?? 'file') . ': ' . $e->getMessage();
+                } finally {
+                    @unlink($tmpPath);
+                }
+            }
 
-            $phpFile = [
-                'name'     => $file->getClientFilename(),
-                'tmp_name' => $tmpPath,
-                'size'     => $file->getSize(),
-                'error'    => UPLOAD_ERR_OK,
-            ];
-
-            try {
-                // We already moved it, so use copy instead of move_uploaded_file
-                $media = MediaService::storeFromPath($tmpPath, $phpFile, $params['tags'] ?? '', $params['source'] ?? null);
-            } catch (\RuntimeException $e) {
-                @unlink($tmpPath);
+            if (!empty($errors) && $lastId === null) {
                 $html = $renderer->render('upload', [
                     'title' => 'Upload – plainbooru',
-                    'error' => $e->getMessage(),
+                    'error' => implode(' | ', $errors),
                 ]);
                 $resp->getBody()->write($html);
                 return $resp->withStatus(400)->withHeader('Content-Type', 'text/html; charset=utf-8');
             }
-            @unlink($tmpPath);
 
-            return $resp->withStatus(302)->withHeader('Location', '/m/' . $media['id']);
+            return $resp->withStatus(302)->withHeader('Location', '/m/' . $lastId);
         });
 
         // GET /m/{id}
@@ -114,23 +146,48 @@ final class App
                 $resp->getBody()->write($html);
                 return $resp->withStatus(404)->withHeader('Content-Type', 'text/html; charset=utf-8');
             }
-            // prev / next
-            $pdo  = Db::get();
-            $prev = $pdo->prepare("SELECT id FROM media WHERE id < ? ORDER BY id DESC LIMIT 1");
-            $prev->execute([$args['id']]);
-            $prevId = $prev->fetchColumn();
-            $next = $pdo->prepare("SELECT id FROM media WHERE id > ? ORDER BY id ASC LIMIT 1");
-            $next->execute([$args['id']]);
-            $nextId = $next->fetchColumn();
-
             $html = $renderer->render('post', [
-                'title'  => 'Post #' . $media['id'] . ' – plainbooru',
-                'media'  => $media,
-                'prevId' => $prevId ?: null,
-                'nextId' => $nextId ?: null,
+                'title'     => 'Post #' . $media['id'] . ' – plainbooru',
+                'media'     => $media,
+                'pools'     => PoolService::getPoolsForMedia((int)$args['id']),
+                'bodyClass' => 'overflow-hidden',
+                'mainClass' => 'flex-1 flex overflow-hidden',
             ]);
             $resp->getBody()->write($html);
             return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
+        });
+
+        // POST /m/{id}/tags – add a tag from the post page sidebar
+        $app->post('/m/{id:[0-9]+}/tags', function (Request $req, Response $resp, array $args) {
+            $id    = (int)$args['id'];
+            $media = MediaService::getById($id);
+            if (!$media) {
+                return $resp->withStatus(404);
+            }
+            $body = (array)($req->getParsedBody() ?? []);
+            $tag  = trim($body['tag'] ?? '');
+            if ($tag !== '') {
+                MediaService::addTags($media, $tag);
+            }
+            return $resp->withStatus(302)->withHeader('Location', '/m/' . $id);
+        });
+
+        // POST /m/{id}/tags/remove
+        $app->post('/m/{id:[0-9]+}/tags/remove', function (Request $req, Response $resp, array $args) {
+            $id   = (int)$args['id'];
+            $body = (array)($req->getParsedBody() ?? []);
+            $tag  = trim($body['tag'] ?? '');
+            if ($tag !== '') {
+                MediaService::removeTag($id, $tag);
+            }
+            return $resp->withStatus(302)->withHeader('Location', '/m/' . $id);
+        });
+
+        // POST /m/{id}/delete
+        $app->post('/m/{id:[0-9]+}/delete', function (Request $req, Response $resp, array $args) {
+            self::requireAdmin($req);
+            MediaService::delete((int)$args['id']);
+            return $resp->withStatus(302)->withHeader('Location', '/');
         });
 
         // GET /search
@@ -141,7 +198,10 @@ final class App
             $page     = max(1, (int)($params['page'] ?? 1));
             $pageSize = 20;
             $data     = MediaService::search($tags, $q, $page, $pageSize);
-
+            $mediaIds = array_column($data['results'], 'id');
+            $sidebar  = $renderer->partial('sidebar_tags', [
+                'sidebar_tags' => MediaService::getTagsForMediaSet($mediaIds),
+            ]);
             $html = $renderer->render('search', [
                 'title'     => 'Search – plainbooru',
                 'media'     => $data['results'],
@@ -150,9 +210,20 @@ final class App
                 'page_size' => $pageSize,
                 'tags'      => $tags,
                 'q'         => $q,
+                'sidebar'   => $sidebar,
             ]);
             $resp->getBody()->write($html);
             return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
+        });
+
+        // GET /t – redirect helper for tag browse form
+        $app->get('/t', function (Request $req, Response $resp) {
+            $params = $req->getQueryParams();
+            $tag    = trim($params['name'] ?? '');
+            if ($tag === '') {
+                return $resp->withStatus(302)->withHeader('Location', '/tags');
+            }
+            return $resp->withStatus(302)->withHeader('Location', '/t/' . urlencode($tag));
         });
 
         // GET /t/{tag}
@@ -162,7 +233,10 @@ final class App
             $page     = max(1, (int)($params['page'] ?? 1));
             $pageSize = 20;
             $data     = MediaService::getByTag($tag, $page, $pageSize);
-
+            $mediaIds = array_column($data['results'], 'id');
+            $sidebar  = $renderer->partial('sidebar_tags', [
+                'sidebar_tags' => MediaService::getTagsForMediaSet($mediaIds),
+            ]);
             $html = $renderer->render('search', [
                 'title'     => "Tag: $tag – plainbooru",
                 'media'     => $data['results'],
@@ -171,6 +245,7 @@ final class App
                 'page_size' => $pageSize,
                 'tags'      => $tag,
                 'q'         => '',
+                'sidebar'   => $sidebar,
             ]);
             $resp->getBody()->write($html);
             return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
@@ -178,26 +253,54 @@ final class App
 
         // GET /tags
         $app->get('/tags', function (Request $req, Response $resp) use ($renderer) {
-            $tags = MediaService::getAllTags();
-            $html = $renderer->render('tags', ['title' => 'Tags – plainbooru', 'tags' => $tags]);
+            $tags    = MediaService::getAllTags();
+            $sidebar = $renderer->partial('sidebar_tag_search', []);
+            $html    = $renderer->render('tags', [
+                'title'   => 'Tags – plainbooru',
+                'tags'    => $tags,
+                'sidebar' => $sidebar,
+            ]);
             $resp->getBody()->write($html);
             return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
+        });
+
+        // POST /tags – create a standalone tag
+        $app->post('/tags', function (Request $req, Response $resp) {
+            $params = $req->getParsedBody();
+            $name   = trim($params['name'] ?? '');
+            if ($name !== '') {
+                $normalized = MediaService::parseTags($name);
+                if ($normalized) {
+                    $pdo = Db::get();
+                    $pdo->prepare('INSERT OR IGNORE INTO tags (name) VALUES (?)')->execute([$normalized[0]]);
+                }
+            }
+            return $resp->withStatus(302)->withHeader('Location', '/tags');
+        });
+
+        // POST /tags/{name}/delete
+        $app->post('/tags/{name}/delete', function (Request $req, Response $resp, array $args) {
+            self::requireAdmin($req);
+            MediaService::deleteTag(urldecode($args['name']));
+            return $resp->withStatus(302)->withHeader('Location', '/tags');
         });
 
         // ── Pools HTML ───────────────────────────────────────────────────────
 
         // GET /pools
         $app->get('/pools', function (Request $req, Response $resp) use ($renderer) {
-            $params   = $req->getQueryParams();
-            $page     = max(1, (int)($params['page'] ?? 1));
-            $data     = PoolService::getList($page, 20);
-            $html     = $renderer->render('pools', [
+            $params  = $req->getQueryParams();
+            $page    = max(1, (int)($params['page'] ?? 1));
+            $data    = PoolService::getList($page, 20);
+            $sidebar = $renderer->partial('sidebar_create_pool', ['error' => null]);
+            $html    = $renderer->render('pools', [
                 'title'     => 'Pools – plainbooru',
                 'pools'     => $data['results'],
                 'total'     => $data['total'],
                 'page'      => $page,
                 'page_size' => 20,
                 'error'     => null,
+                'sidebar'   => $sidebar,
             ]);
             $resp->getBody()->write($html);
             return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
@@ -211,20 +314,184 @@ final class App
             $desc   = trim($params['description'] ?? '') ?: null;
             try {
                 $pool = PoolService::create($name, $desc);
-                return $resp->withStatus(302)->withHeader('Location', '/pools/' . $pool['id']);
+                return $resp->withStatus(302)->withHeader('Location', '/pools/' . $pool['id'] . '/edit');
             } catch (\RuntimeException $e) {
-                $data = PoolService::getList(1, 20);
-                $html = $renderer->render('pools', [
+                $data    = PoolService::getList(1, 20);
+                $sidebar = $renderer->partial('sidebar_create_pool', ['error' => $e->getMessage()]);
+                $html    = $renderer->render('pools', [
                     'title'     => 'Pools – plainbooru',
                     'pools'     => $data['results'],
                     'total'     => $data['total'],
                     'page'      => 1,
                     'page_size' => 20,
                     'error'     => $e->getMessage(),
+                    'sidebar'   => $sidebar,
                 ]);
                 $resp->getBody()->write($html);
                 return $resp->withStatus(400)->withHeader('Content-Type', 'text/html; charset=utf-8');
             }
+        });
+
+        // GET /pools/{id}/edit — must be before GET /pools/{id}
+        $app->get('/pools/{id:[0-9]+}/edit', function (Request $req, Response $resp, array $args) use ($renderer) {
+            $pool = PoolService::getById((int)$args['id']);
+            if (!$pool) {
+                $html = $renderer->render('error', ['title' => 'Not Found', 'message' => 'Pool not found.', 'code' => 404]);
+                $resp->getBody()->write($html);
+                return $resp->withStatus(404)->withHeader('Content-Type', 'text/html; charset=utf-8');
+            }
+            $html = $renderer->render('pool_edit', [
+                'title' => 'Edit: ' . $pool['name'] . ' – plainbooru',
+                'pool'  => $pool,
+                'error' => null,
+            ]);
+            $resp->getBody()->write($html);
+            return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
+        });
+
+        // POST /pools/{id}/update
+        $app->post('/pools/{id:[0-9]+}/update', function (Request $req, Response $resp, array $args) use ($renderer) {
+            self::requireAdmin($req);
+            $poolId = (int)$args['id'];
+            $params = $req->getParsedBody();
+            $name   = trim($params['name'] ?? '');
+            $desc   = trim($params['description'] ?? '') ?: null;
+            try {
+                PoolService::update($poolId, $name, $desc);
+            } catch (\RuntimeException $e) {
+                $pool = PoolService::getById($poolId);
+                $html = $renderer->render('pool_edit', [
+                    'title' => 'Edit: ' . ($pool['name'] ?? '') . ' – plainbooru',
+                    'pool'  => $pool,
+                    'error' => $e->getMessage(),
+                ]);
+                $resp->getBody()->write($html);
+                return $resp->withStatus(400)->withHeader('Content-Type', 'text/html; charset=utf-8');
+            }
+            return $resp->withStatus(302)->withHeader('Location', '/pools/' . $poolId . '/edit');
+        });
+
+        // POST /pools/{id}/tags – add tag to pool
+        $app->post('/pools/{id:[0-9]+}/tags', function (Request $req, Response $resp, array $args) {
+            self::requireAdmin($req);
+            $poolId = (int)$args['id'];
+            $params = $req->getParsedBody();
+            $tag    = trim($params['tag'] ?? '');
+            if ($tag !== '') {
+                PoolService::addTag($poolId, $tag);
+            }
+            $return = $params['return'] ?? '/pools/' . $poolId . '/edit';
+            if (!str_starts_with($return, '/') || str_starts_with($return, '//')) {
+                $return = '/pools/' . $poolId . '/edit';
+            }
+            return $resp->withStatus(302)->withHeader('Location', $return);
+        });
+
+        // POST /pools/{id}/tags/remove
+        $app->post('/pools/{id:[0-9]+}/tags/remove', function (Request $req, Response $resp, array $args) {
+            self::requireAdmin($req);
+            $poolId = (int)$args['id'];
+            $params = $req->getParsedBody();
+            $tag    = trim($params['tag'] ?? '');
+            if ($tag !== '') {
+                PoolService::removeTag($poolId, $tag);
+            }
+            return $resp->withStatus(302)->withHeader('Location', '/pools/' . $poolId . '/edit');
+        });
+
+        // POST /pools/{id}/upload – upload one or more files and add to pool
+        $app->post('/pools/{id:[0-9]+}/upload', function (Request $req, Response $resp, array $args) use ($renderer) {
+            self::requireAdmin($req);
+            $poolId  = (int)$args['id'];
+            $allFiles = $req->getUploadedFiles();
+            $params  = $req->getParsedBody();
+
+            // Accept files[] (multi-upload) or legacy file (single)
+            $uploaded = $allFiles['files'] ?? ($allFiles['file'] ?? []);
+            if (!is_array($uploaded)) {
+                $uploaded = [$uploaded];
+            }
+            $uploaded = array_filter($uploaded, fn($f) => $f && $f->getError() === UPLOAD_ERR_OK);
+
+            if (empty($uploaded)) {
+                $pool = PoolService::getById($poolId);
+                $html = $renderer->render('pool_edit', [
+                    'title' => 'Edit: ' . ($pool['name'] ?? '') . ' – plainbooru',
+                    'pool'  => $pool,
+                    'error' => 'No valid files received. Check file types and try again.',
+                ]);
+                $resp->getBody()->write($html);
+                return $resp->withStatus(400)->withHeader('Content-Type', 'text/html; charset=utf-8');
+            }
+
+            $errors = [];
+            foreach ($uploaded as $file) {
+                $tmpPath = tempnam(sys_get_temp_dir(), 'pb_');
+                $file->moveTo($tmpPath);
+                $phpFile = [
+                    'name'     => $file->getClientFilename(),
+                    'tmp_name' => $tmpPath,
+                    'size'     => $file->getSize(),
+                    'error'    => UPLOAD_ERR_OK,
+                ];
+                try {
+                    $media = MediaService::storeFromPath($tmpPath, $phpFile, $params['tags'] ?? '');
+                    PoolService::addItem($poolId, (int)$media['id']);
+                } catch (\RuntimeException $e) {
+                    $errors[] = ($file->getClientFilename() ?? 'file') . ': ' . $e->getMessage();
+                } finally {
+                    @unlink($tmpPath);
+                }
+            }
+
+            if (!empty($errors)) {
+                $pool = PoolService::getById($poolId);
+                $html = $renderer->render('pool_edit', [
+                    'title' => 'Edit: ' . ($pool['name'] ?? '') . ' – plainbooru',
+                    'pool'  => $pool,
+                    'error' => implode(' | ', $errors),
+                ]);
+                $resp->getBody()->write($html);
+                return $resp->withStatus(400)->withHeader('Content-Type', 'text/html; charset=utf-8');
+            }
+
+            return $resp->withStatus(302)->withHeader('Location', '/pools/' . $poolId . '/edit#items');
+        });
+
+        // POST /pools/{id}/delete
+        $app->post('/pools/{id:[0-9]+}/delete', function (Request $req, Response $resp, array $args) {
+            self::requireAdmin($req);
+            PoolService::delete((int)$args['id']);
+            return $resp->withStatus(302)->withHeader('Location', '/pools');
+        });
+
+        // GET /pools/{poolId}/m/{mediaId} — pool-context media viewer
+        $app->get('/pools/{poolId:[0-9]+}/m/{mediaId:[0-9]+}', function (Request $req, Response $resp, array $args) use ($renderer) {
+            $pool  = PoolService::getById((int)$args['poolId']);
+            $media = MediaService::getById((int)$args['mediaId']);
+            if (!$pool || !$media) {
+                $html = $renderer->render('error', ['title' => 'Not Found', 'message' => 'Not found.', 'code' => 404]);
+                $resp->getBody()->write($html);
+                return $resp->withStatus(404)->withHeader('Content-Type', 'text/html; charset=utf-8');
+            }
+            $items    = array_column($pool['items'], 'id');
+            $idx      = array_search((int)$args['mediaId'], $items);
+            $poolPrev = ($idx !== false && $idx > 0)                   ? $items[$idx - 1] : null;
+            $poolNext = ($idx !== false && $idx < count($items) - 1)   ? $items[$idx + 1] : null;
+            $html = $renderer->render('post_pool', [
+                'title'      => 'Post #' . $media['id'] . ' – ' . $pool['name'] . ' – plainbooru',
+                'media'      => $media,
+                'pools'      => PoolService::getPoolsForMedia((int)$args['mediaId']),
+                'pool'       => $pool,
+                'pool_prev'  => $poolPrev,
+                'pool_next'  => $poolNext,
+                'pool_pos'   => $idx !== false ? $idx + 1 : '?',
+                'pool_total' => count($items),
+                'bodyClass'  => 'overflow-hidden',
+                'mainClass'  => 'flex-1 flex overflow-hidden',
+            ]);
+            $resp->getBody()->write($html);
+            return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
         });
 
         // GET /pools/{id}
@@ -235,10 +502,11 @@ final class App
                 $resp->getBody()->write($html);
                 return $resp->withStatus(404)->withHeader('Content-Type', 'text/html; charset=utf-8');
             }
-            $html = $renderer->render('pool', [
-                'title' => $pool['name'] . ' – plainbooru',
-                'pool'  => $pool,
-                'error' => null,
+            $sidebar = $renderer->partial('sidebar_pool', ['pool' => $pool]);
+            $html    = $renderer->render('pool', [
+                'title'   => $pool['name'] . ' – plainbooru',
+                'pool'    => $pool,
+                'sidebar' => $sidebar,
             ]);
             $resp->getBody()->write($html);
             return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
@@ -254,25 +522,22 @@ final class App
             try {
                 PoolService::addItem($poolId, $mediaId, $pos);
             } catch (\RuntimeException $e) {
-                // Show pool page with error
                 $pool = PoolService::getById($poolId);
-                $html = $renderer->render('pool', ['title' => ($pool['name'] ?? 'Pool') . ' – plainbooru', 'pool' => $pool, 'error' => $e->getMessage()]);
+                $html = $renderer->render('pool_edit', ['title' => ($pool['name'] ?? 'Pool') . ' – plainbooru', 'pool' => $pool, 'error' => $e->getMessage()]);
                 $resp->getBody()->write($html);
                 return $resp->withStatus(400)->withHeader('Content-Type', 'text/html; charset=utf-8');
             }
-            return $resp->withStatus(302)->withHeader('Location', '/pools/' . $poolId);
+            return $resp->withStatus(302)->withHeader('Location', '/pools/' . $poolId . '/edit');
         });
 
         // POST /pools/{id}/reorder
-        $app->post('/pools/{id:[0-9]+}/reorder', function (Request $req, Response $resp, array $args) use ($renderer) {
+        $app->post('/pools/{id:[0-9]+}/reorder', function (Request $req, Response $resp, array $args) {
             self::requireAdmin($req);
             $poolId = (int)$args['id'];
             $params = $req->getParsedBody();
-            // Accept textarea of newline/comma separated IDs OR item_id[] array
             $mediaIds = [];
             if (!empty($params['item_ids'])) {
-                // textarea approach
-                $raw = preg_split('/[\s,]+/', trim($params['item_ids']), -1, PREG_SPLIT_NO_EMPTY);
+                $raw      = preg_split('/[\s,]+/', trim($params['item_ids']), -1, PREG_SPLIT_NO_EMPTY);
                 $mediaIds = array_map('intval', $raw);
             } elseif (!empty($params['item_id']) && is_array($params['item_id'])) {
                 $mediaIds = array_map('intval', $params['item_id']);
@@ -282,17 +547,38 @@ final class App
             } catch (\Throwable $e) {
                 // ignore reorder errors silently
             }
-            return $resp->withStatus(302)->withHeader('Location', '/pools/' . $poolId);
+            return $resp->withStatus(302)->withHeader('Location', '/pools/' . $poolId . '/edit#items');
+        });
+
+        // POST /pools/{id}/move – shift one item one position left or right
+        $app->post('/pools/{id:[0-9]+}/move', function (Request $req, Response $resp, array $args) {
+            self::requireAdmin($req);
+            $poolId    = (int)$args['id'];
+            $params    = $req->getParsedBody();
+            $mediaId   = (int)($params['media_id'] ?? 0);
+            $direction = $params['direction'] ?? '';
+            $pool      = PoolService::getById($poolId);
+            $ids       = array_column($pool['items'] ?? [], 'id');
+            $idx       = array_search($mediaId, $ids);
+            if ($idx !== false) {
+                if ($direction === 'prev' && $idx > 0) {
+                    [$ids[$idx - 1], $ids[$idx]] = [$ids[$idx], $ids[$idx - 1]];
+                } elseif ($direction === 'next' && $idx < count($ids) - 1) {
+                    [$ids[$idx], $ids[$idx + 1]] = [$ids[$idx + 1], $ids[$idx]];
+                }
+                PoolService::reorder($poolId, $ids);
+            }
+            return $resp->withStatus(302)->withHeader('Location', '/pools/' . $poolId . '/edit#items');
         });
 
         // POST /pools/{id}/remove
-        $app->post('/pools/{id:[0-9]+}/remove', function (Request $req, Response $resp, array $args) use ($renderer) {
+        $app->post('/pools/{id:[0-9]+}/remove', function (Request $req, Response $resp, array $args) {
             self::requireAdmin($req);
             $poolId  = (int)$args['id'];
             $params  = $req->getParsedBody();
             $mediaId = (int)($params['media_id'] ?? 0);
             PoolService::removeItem($poolId, $mediaId);
-            return $resp->withStatus(302)->withHeader('Location', '/pools/' . $poolId);
+            return $resp->withStatus(302)->withHeader('Location', '/pools/' . $poolId . '/edit#items');
         });
 
         // ── Media serving ────────────────────────────────────────────────────
@@ -365,7 +651,7 @@ final class App
             ];
 
             try {
-                $media = MediaService::storeFromPath($tmpPath, $phpFile, $params['tags'] ?? '', $params['source'] ?? null);
+                $media = MediaService::storeFromPath($tmpPath, $phpFile, $params['tags'] ?? '');
             } catch (\RuntimeException $e) {
                 @unlink($tmpPath);
                 return self::jsonResp($resp, ['error' => $e->getMessage()], 422);
@@ -573,7 +859,6 @@ final class App
             'height'           => $media['height'],
             'duration_seconds' => $media['duration_seconds'],
             'created_at'       => $media['created_at'],
-            'source'           => $media['source'],
             'tags'             => $media['tags'] ?? MediaService::getTags((int)$media['id']),
             'urls'             => [
                 'page'  => '/m/' . $media['id'],

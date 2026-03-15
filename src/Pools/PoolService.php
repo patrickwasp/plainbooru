@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Plainbooru\Pools;
 
 use Plainbooru\Db;
+use Plainbooru\Media\MediaService;
 
 final class PoolService
 {
@@ -32,6 +33,7 @@ final class PoolService
             return null;
         }
         $pool['items'] = self::getItems($id);
+        $pool['tags']  = self::getTags($id);
         return $pool;
     }
 
@@ -40,7 +42,10 @@ final class PoolService
         $pdo    = Db::get();
         $offset = ($page - 1) * $pageSize;
         $stmt   = $pdo->prepare(<<<'SQL'
-            SELECT p.*, (SELECT COUNT(*) FROM pool_items pi WHERE pi.pool_id = p.id) AS items_count
+            SELECT p.*,
+                   (SELECT COUNT(*) FROM pool_items pi WHERE pi.pool_id = p.id) AS items_count,
+                   (SELECT pi2.media_id FROM pool_items pi2 WHERE pi2.pool_id = p.id ORDER BY pi2.position ASC LIMIT 1) AS first_media_id,
+                   (SELECT GROUP_CONCAT(name, ',') FROM (SELECT t.name FROM tags t JOIN pool_tags pt ON pt.tag_id = t.id WHERE pt.pool_id = p.id ORDER BY t.name LIMIT 3) sub) AS top_tags
             FROM pools p
             ORDER BY p.created_at DESC
             LIMIT :lim OFFSET :off
@@ -135,6 +140,70 @@ final class PoolService
             ORDER BY pi.position ASC
         SQL);
         $stmt->execute([$poolId]);
+        return $stmt->fetchAll();
+    }
+
+    public static function update(int $id, string $name, ?string $description = null): array
+    {
+        $name = trim($name);
+        if ($name === '') {
+            throw new \RuntimeException('Pool name cannot be empty.');
+        }
+        $pdo  = Db::get();
+        $stmt = $pdo->prepare('UPDATE pools SET name = ?, description = ? WHERE id = ?');
+        $stmt->execute([$name, $description ?: null, $id]);
+        return self::getById($id);
+    }
+
+    public static function getTags(int $poolId): array
+    {
+        $pdo  = Db::get();
+        $stmt = $pdo->prepare(<<<'SQL'
+            SELECT t.name FROM tags t
+            JOIN pool_tags pt ON pt.tag_id = t.id
+            WHERE pt.pool_id = ?
+            ORDER BY t.name
+        SQL);
+        $stmt->execute([$poolId]);
+        return $stmt->fetchAll(\PDO::FETCH_COLUMN);
+    }
+
+    public static function addTag(int $poolId, string $tagName): void
+    {
+        $parsed = MediaService::parseTags($tagName);
+        if (empty($parsed)) {
+            return;
+        }
+        $tagName = $parsed[0];
+        $pdo = Db::get();
+        $pdo->prepare('INSERT OR IGNORE INTO tags (name) VALUES (?)')->execute([$tagName]);
+        $stmt = $pdo->prepare('SELECT id FROM tags WHERE name = ?');
+        $stmt->execute([$tagName]);
+        $tagId = (int)$stmt->fetchColumn();
+        $pdo->prepare('INSERT OR IGNORE INTO pool_tags (pool_id, tag_id) VALUES (?, ?)')->execute([$poolId, $tagId]);
+    }
+
+    public static function removeTag(int $poolId, string $tagName): void
+    {
+        $pdo = Db::get();
+        $pdo->prepare(<<<'SQL'
+            DELETE FROM pool_tags
+            WHERE pool_id = ?
+              AND tag_id = (SELECT id FROM tags WHERE name = ?)
+        SQL)->execute([$poolId, $tagName]);
+    }
+
+    public static function getPoolsForMedia(int $mediaId): array
+    {
+        $pdo  = Db::get();
+        $stmt = $pdo->prepare(<<<'SQL'
+            SELECT p.id, p.name
+            FROM pools p
+            JOIN pool_items pi ON pi.pool_id = p.id
+            WHERE pi.media_id = ?
+            ORDER BY p.name ASC
+        SQL);
+        $stmt->execute([$mediaId]);
         return $stmt->fetchAll();
     }
 

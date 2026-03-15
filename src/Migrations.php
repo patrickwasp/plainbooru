@@ -21,8 +21,7 @@ final class Migrations
                 width          INTEGER NULL,
                 height         INTEGER NULL,
                 duration_seconds REAL  NULL,
-                created_at     TEXT    NOT NULL,
-                source         TEXT    NULL
+                created_at     TEXT    NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS tags (
@@ -52,10 +51,17 @@ final class Migrations
                 UNIQUE(pool_id, position)
             );
 
+            CREATE TABLE IF NOT EXISTS pool_tags (
+                pool_id INTEGER NOT NULL REFERENCES pools(id) ON DELETE CASCADE,
+                tag_id  INTEGER NOT NULL REFERENCES tags(id)  ON DELETE CASCADE,
+                PRIMARY KEY (pool_id, tag_id)
+            );
+
             CREATE INDEX IF NOT EXISTS idx_media_created_at   ON media(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_tags_name          ON tags(name);
             CREATE INDEX IF NOT EXISTS idx_media_tags_tag_id  ON media_tags(tag_id);
             CREATE INDEX IF NOT EXISTS idx_pool_items_pos     ON pool_items(pool_id, position);
+            CREATE INDEX IF NOT EXISTS idx_pool_tags_pool_id   ON pool_tags(pool_id);
             CREATE INDEX IF NOT EXISTS idx_pools_created_at   ON pools(created_at DESC);
         SQL);
     }
