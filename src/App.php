@@ -4,16 +4,29 @@ declare(strict_types=1);
 
 namespace Plainbooru;
 
+use Plainbooru\Auth\Guard;
+use Plainbooru\Auth\ModLog;
+use Plainbooru\Auth\Policy;
+use Plainbooru\Auth\TokenService;
 use Plainbooru\Auth\UserService;
+use Plainbooru\RateLimiter;
 use Plainbooru\Db;
+use Plainbooru\Http\Csrf;
+use Plainbooru\Http\Flash;
+use Plainbooru\Settings;
 use Plainbooru\Media\MediaService;
 use Plainbooru\Media\ThumbService;
 use Plainbooru\Pools\PoolService;
+use Plainbooru\Social\CommentService;
+use Plainbooru\Social\FavoriteService;
+use Plainbooru\Social\VoteService;
 use Plainbooru\Templates\Renderer;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use Psr\Http\Message\UploadedFileInterface;
 use Slim\App as SlimApp;
+use Slim\Exception\HttpNotFoundException;
+use Slim\Exception\HttpMethodNotAllowedException;
 use Slim\Factory\AppFactory;
 use Slim\Psr7\Factory\StreamFactory;
 
@@ -32,9 +45,56 @@ final class App
         }
 
         $app = AppFactory::create();
-        $app->addErrorMiddleware(true, true, true);
 
         $renderer = new Renderer(Config::rootPath() . '/templates');
+
+        $errorMiddleware = $app->addErrorMiddleware(false, true, true);
+        $errorHandler = function (Request $req, \Throwable $ex) use ($renderer): Response {
+            $code = $ex->getCode();
+
+            // Not logged in + forbidden → redirect to login
+            if ($code === 403 && UserService::current() === null) {
+                $next = urlencode((string)$req->getUri()->getPath());
+                $resp = new \Slim\Psr7\Response(302);
+                return $resp->withHeader('Location', '/login?next=' . $next);
+            }
+
+            [$status, $title, $message] = match(true) {
+                $ex instanceof HttpNotFoundException         => [404, 'Not Found',            'The page you\'re looking for doesn\'t exist.'],
+                $ex instanceof HttpMethodNotAllowedException => [405, 'Method Not Allowed',   'That request method is not supported here.'],
+                $code === 403                               => [403, 'Forbidden',             'You don\'t have permission to access this page.'],
+                $code === 404                               => [404, 'Not Found',             'The page you\'re looking for doesn\'t exist.'],
+                default                                     => [500, 'Something went wrong',  'An unexpected error occurred. Please try again.'],
+            };
+
+            $html = $renderer->render('error', ['title' => $title, 'message' => $message, 'code' => $status]);
+            $resp = new \Slim\Psr7\Response($status);
+            $resp->getBody()->write($html);
+            return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
+        };
+        $errorMiddleware->setDefaultErrorHandler($errorHandler);
+        $errorMiddleware->setErrorHandler(HttpNotFoundException::class, $errorHandler, true);
+        $errorMiddleware->setErrorHandler(HttpMethodNotAllowedException::class, $errorHandler, true);
+
+        // CSRF middleware — verify token on all unsafe methods
+        $app->add(function (Request $req, $handler) use ($renderer) {
+            $method = strtoupper($req->getMethod());
+            if (in_array($method, ['POST', 'PUT', 'PATCH', 'DELETE'], true)) {
+                $body      = (array)($req->getParsedBody() ?? []);
+                $submitted = $body['_csrf'] ?? '';
+                if (!Csrf::verify($submitted)) {
+                    $html = $renderer->render('error', [
+                        'title'   => 'Forbidden',
+                        'message' => 'Invalid or missing security token. Please go back and try again.',
+                        'code'    => 403,
+                    ]);
+                    $resp = new \Slim\Psr7\Response(403);
+                    $resp->getBody()->write($html);
+                    return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
+                }
+            }
+            return $handler->handle($req);
+        });
 
         // Security headers middleware
         $app->add(function (Request $req, $handler) {
@@ -43,6 +103,22 @@ final class App
                 ->withHeader('X-Content-Type-Options', 'nosniff')
                 ->withHeader('X-Frame-Options', 'SAMEORIGIN')
                 ->withHeader('Referrer-Policy', 'same-origin');
+        });
+
+        // Bearer token middleware — resolves API user on /api/* routes
+        $app->add(function (Request $req, $handler) {
+            $path = $req->getUri()->getPath();
+            if (str_starts_with($path, '/api/')) {
+                $header = $req->getHeaderLine('Authorization');
+                if (str_starts_with($header, 'Bearer ')) {
+                    $raw     = substr($header, 7);
+                    $apiUser = TokenService::verify($raw);
+                    if ($apiUser !== null) {
+                        $req = $req->withAttribute('api_user', $apiUser);
+                    }
+                }
+            }
+            return $handler->handle($req);
         });
 
         // ── HTML Routes ──────────────────────────────────────────────────────
@@ -57,12 +133,13 @@ final class App
                 'sidebar_tags' => MediaService::getPopularTags(20),
             ]);
             $html = $renderer->render('home', [
-                'title'     => 'plainbooru',
-                'media'     => $data['results'],
-                'total'     => $data['total'],
-                'page'      => $page,
-                'page_size' => $pageSize,
-                'sidebar'   => $sidebar,
+                'title'      => 'plainbooru',
+                'media'      => $data['results'],
+                'total'      => $data['total'],
+                'page'       => $page,
+                'page_size'  => $pageSize,
+                'totalPages' => max(1, (int)ceil($data['total'] / max(1, $pageSize))),
+                'sidebar'    => $sidebar,
             ]);
             $resp->getBody()->write($html);
             return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
@@ -164,15 +241,201 @@ final class App
             }
         });
 
-        // GET /settings
-        $app->get('/settings', function (Request $req, Response $resp) use ($renderer) {
+        // GET /settings → redirect to account settings
+        $app->get('/settings', function (Request $req, Response $resp) {
+            return $resp->withStatus(302)->withHeader('Location', '/settings/account');
+        });
+
+        // GET /settings/account
+        $app->get('/settings/account', function (Request $req, Response $resp) use ($renderer) {
             $user = UserService::current();
             if (!$user) {
-                return $resp->withStatus(302)->withHeader('Location', '/login?next=/settings');
+                return $resp->withStatus(302)->withHeader('Location', '/login?next=/settings/account');
             }
-            $html = $renderer->render('settings', ['title' => 'Settings – plainbooru']);
+            $html = $renderer->render('account_settings', [
+                'title' => 'Account Settings – plainbooru',
+                'error' => null,
+            ]);
             $resp->getBody()->write($html);
             return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
+        });
+
+        // POST /settings/account
+        $app->post('/settings/account', function (Request $req, Response $resp) use ($renderer) {
+            $user = UserService::current();
+            if (!$user) {
+                return $resp->withStatus(302)->withHeader('Location', '/login?next=/settings/account');
+            }
+            $body   = (array)($req->getParsedBody() ?? []);
+            $action = $body['action'] ?? '';
+
+            if ($action === 'bio') {
+                UserService::updateBio((int)$user['id'], $body['bio'] ?? null);
+                Flash::set('success', 'Bio updated.');
+                return $resp->withStatus(302)->withHeader('Location', '/settings/account');
+            }
+
+            if ($action === 'password') {
+                $current = $body['current_password'] ?? '';
+                $new     = $body['new_password'] ?? '';
+                $confirm = $body['confirm_password'] ?? '';
+                try {
+                    if ($new !== $confirm) {
+                        throw new \RuntimeException('New passwords do not match.');
+                    }
+                    if (strlen($new) < 8) {
+                        throw new \RuntimeException('Password must be at least 8 characters.');
+                    }
+                    if (!UserService::changePassword((int)$user['id'], $current, $new)) {
+                        throw new \RuntimeException('Current password is incorrect.');
+                    }
+                    Flash::set('success', 'Password updated.');
+                    return $resp->withStatus(302)->withHeader('Location', '/settings/account');
+                } catch (\RuntimeException $e) {
+                    $html = $renderer->render('account_settings', [
+                        'title' => 'Account Settings – plainbooru',
+                        'error' => $e->getMessage(),
+                    ]);
+                    $resp->getBody()->write($html);
+                    return $resp->withStatus(422)->withHeader('Content-Type', 'text/html; charset=utf-8');
+                }
+            }
+
+            return $resp->withStatus(302)->withHeader('Location', '/settings/account');
+        });
+
+        // GET /settings/tokens
+        $app->get('/settings/tokens', function (Request $req, Response $resp) use ($renderer) {
+            $user = UserService::current();
+            if (!$user) {
+                return $resp->withStatus(302)->withHeader('Location', '/login?next=/settings/tokens');
+            }
+            $html = $renderer->render('account_settings', [
+                'title'  => 'API Tokens – plainbooru',
+                'tokens' => TokenService::listForUser((int)$user['id']),
+                'error'  => null,
+            ]);
+            $resp->getBody()->write($html);
+            return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
+        });
+
+        // POST /settings/tokens
+        $app->post('/settings/tokens', function (Request $req, Response $resp) use ($renderer) {
+            $user = UserService::current();
+            if (!$user) {
+                return $resp->withStatus(302)->withHeader('Location', '/login?next=/settings/tokens');
+            }
+            $body  = (array)($req->getParsedBody() ?? []);
+            $label = trim($body['label'] ?? '');
+            try {
+                $raw = TokenService::generate((int)$user['id'], $label);
+                Flash::set('success', 'Token created: ' . $raw);
+            } catch (\RuntimeException $e) {
+                Flash::set('error', $e->getMessage());
+            }
+            return $resp->withStatus(302)->withHeader('Location', '/settings/tokens');
+        });
+
+        // POST /settings/tokens/{id}/revoke
+        $app->post('/settings/tokens/{id:[0-9]+}/revoke', function (Request $req, Response $resp, array $args) {
+            $user = UserService::current();
+            if (!$user) {
+                return $resp->withStatus(302)->withHeader('Location', '/login');
+            }
+            try {
+                TokenService::revoke((int)$args['id'], (int)$user['id']);
+                Flash::set('success', 'Token revoked.');
+            } catch (\RuntimeException $e) {
+                Flash::set('error', $e->getMessage());
+            }
+            return $resp->withStatus(302)->withHeader('Location', '/settings/tokens');
+        });
+
+        // GET /u/{username} – public profile page
+        $app->get('/u/{username}', function (Request $req, Response $resp, array $args) use ($renderer) {
+            $profile = UserService::getByUsername($args['username']);
+            if (!$profile) {
+                $html = $renderer->render('error', ['title' => 'Not Found', 'message' => 'User not found.', 'code' => 404]);
+                $resp->getBody()->write($html);
+                return $resp->withStatus(404)->withHeader('Content-Type', 'text/html; charset=utf-8');
+            }
+            $params   = $req->getQueryParams();
+            $page     = max(1, (int)($params['page'] ?? 1));
+            $pageSize = Settings::getInt('items_per_page', 20);
+            $uploads  = MediaService::getByUploader((int)$profile['id'], $page, $pageSize);
+            $html = $renderer->render('profile', [
+                'title'      => $profile['username'] . ' – plainbooru',
+                'profile'    => $profile,
+                'media'      => $uploads['results'],
+                'total'      => $uploads['total'],
+                'page'       => $page,
+                'page_size'  => $pageSize,
+                'totalPages' => max(1, (int)ceil($uploads['total'] / max(1, $pageSize))),
+            ]);
+            $resp->getBody()->write($html);
+            return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
+        });
+
+        // GET /u/{username}/favorites
+        $app->get('/u/{username}/favorites', function (Request $req, Response $resp, array $args) use ($renderer) {
+            $profile = UserService::getByUsername($args['username']);
+            if (!$profile) {
+                $html = $renderer->render('error', ['title' => 'Not Found', 'message' => 'User not found.', 'code' => 404]);
+                $resp->getBody()->write($html);
+                return $resp->withStatus(404)->withHeader('Content-Type', 'text/html; charset=utf-8');
+            }
+            $params   = $req->getQueryParams();
+            $page     = max(1, (int)($params['page'] ?? 1));
+            $pageSize = Settings::getInt('items_per_page', 20);
+            $data     = FavoriteService::getForUser((int)$profile['id'], $page, $pageSize);
+            $html = $renderer->render('favorites', [
+                'title'      => $profile['username'] . '\'s Favorites – plainbooru',
+                'profile'    => $profile,
+                'media'      => $data['results'],
+                'total'      => $data['total'],
+                'page'       => $page,
+                'page_size'  => $pageSize,
+                'totalPages' => max(1, (int)ceil($data['total'] / max(1, $pageSize))),
+            ]);
+            $resp->getBody()->write($html);
+            return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
+        });
+
+        // GET /admin/settings
+        $app->get('/admin/settings', function (Request $req, Response $resp) use ($renderer) {
+            $user = UserService::current();
+            Guard::requireAtLeast('admin', $user);
+            $pdo      = Db::get();
+            $rows     = $pdo->query('SELECT key, value FROM settings')->fetchAll(\PDO::FETCH_KEY_PAIR);
+            $settings = array_merge(Settings::defaults(), $rows);
+            $html = $renderer->render('admin/site_settings', [
+                'title'    => 'Site Settings – Admin – plainbooru',
+                'settings' => $settings,
+            ]);
+            $resp->getBody()->write($html);
+            return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
+        });
+
+        // POST /admin/settings
+        $app->post('/admin/settings', function (Request $req, Response $resp) {
+            $user = UserService::current();
+            Guard::requireAtLeast('admin', $user);
+            $body = (array)($req->getParsedBody() ?? []);
+
+            $boolKeys = ['registration_enabled','anon_can_upload','anon_can_comment',
+                         'anon_can_vote','anon_can_create_pool','anon_can_edit_tags'];
+
+            foreach (Settings::defaults() as $key => $default) {
+                if (in_array($key, $boolKeys, true)) {
+                    // Checkboxes are absent when unchecked
+                    Settings::setBool($key, isset($body[$key]) && $body[$key] === '1');
+                } elseif (isset($body[$key])) {
+                    Settings::set($key, (string)$body[$key]);
+                }
+            }
+
+            Flash::set('success', 'Settings saved.');
+            return $resp->withStatus(302)->withHeader('Location', '/admin/settings');
         });
 
         // POST /logout
@@ -190,6 +453,13 @@ final class App
 
         // POST /upload
         $app->post('/upload', function (Request $req, Response $resp) use ($renderer) {
+            $uploadUser  = UserService::current();
+            $uploadLimit = Settings::getInt('rate_limit_uploads_per_hour', 20);
+            $uploadKey   = RateLimiter::key('upload', $uploadUser ? (int)$uploadUser['id'] : null);
+            if (!RateLimiter::hit($uploadKey, $uploadLimit, 3600)) {
+                Flash::set('error', 'Upload rate limit reached. Please wait before uploading again.');
+                return $resp->withStatus(302)->withHeader('Location', '/upload');
+            }
             $allFiles = $req->getUploadedFiles();
             $params   = $req->getParsedBody();
 
@@ -210,6 +480,7 @@ final class App
                 return $resp->withStatus(400)->withHeader('Content-Type', 'text/html; charset=utf-8');
             }
 
+            $uploaderId = UserService::current()['id'] ?? null;
             $errors  = [];
             $lastId  = null;
             foreach ($uploaded as $file) {
@@ -222,7 +493,7 @@ final class App
                     'error'    => UPLOAD_ERR_OK,
                 ];
                 try {
-                    $media  = MediaService::storeFromPath($tmpPath, $phpFile, $params['tags'] ?? '');
+                    $media  = MediaService::storeFromPath($tmpPath, $phpFile, $params['tags'] ?? '', $uploaderId);
                     $lastId = $media['id'];
                 } catch (\RuntimeException $e) {
                     $errors[] = ($file->getClientFilename() ?? 'file') . ': ' . $e->getMessage();
@@ -251,12 +522,24 @@ final class App
                 $resp->getBody()->write($html);
                 return $resp->withStatus(404)->withHeader('Content-Type', 'text/html; charset=utf-8');
             }
+            $currentUser = UserService::current();
+            $mediaId     = (int)$args['id'];
             $html = $renderer->render('post', [
-                'title'     => 'Post #' . $media['id'] . ' – plainbooru',
-                'media'     => $media,
-                'pools'     => PoolService::getPoolsForMedia((int)$args['id']),
-                'bodyClass' => 'overflow-hidden',
-                'mainClass' => 'flex-1 flex overflow-hidden',
+                'title'        => 'Post #' . $media['id'] . ' – plainbooru',
+                'media'        => $media,
+                'pools'        => PoolService::getPoolsForMedia($mediaId),
+                'bodyClass'    => 'h-full overflow-hidden',
+                'mainClass'    => 'flex-1 min-h-0 flex overflow-hidden',
+                'vote_score'   => VoteService::score($mediaId),
+                'user_vote'    => $currentUser ? VoteService::userVote((int)$currentUser['id'], $mediaId) : null,
+                'fav_count'    => FavoriteService::countForMedia($mediaId),
+                'is_favorited' => $currentUser ? FavoriteService::isFavorited((int)$currentUser['id'], $mediaId) : false,
+                'can_vote'      => Policy::canVote($currentUser),
+                'can_comment'   => Policy::canComment($currentUser),
+                'can_edit_tags' => Policy::canEditTags($currentUser),
+                'can_moderate'  => Policy::canModerate($currentUser),
+                'is_owner'      => Policy::isOwner($media['uploader_id'] ?? null, $currentUser),
+                'comments'      => CommentService::getForMedia($mediaId),
             ]);
             $resp->getBody()->write($html);
             return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
@@ -264,6 +547,11 @@ final class App
 
         // POST /m/{id}/tags – add a tag from the post page sidebar
         $app->post('/m/{id:[0-9]+}/tags', function (Request $req, Response $resp, array $args) {
+            $user = UserService::current();
+            if (!Policy::canEditTags($user)) {
+                Flash::set('error', 'You do not have permission to edit tags.');
+                return $resp->withStatus(302)->withHeader('Location', '/m/' . $args['id']);
+            }
             $id    = (int)$args['id'];
             $media = MediaService::getById($id);
             if (!$media) {
@@ -279,6 +567,10 @@ final class App
 
         // POST /m/{id}/tags/remove
         $app->post('/m/{id:[0-9]+}/tags/remove', function (Request $req, Response $resp, array $args) {
+            $user = UserService::current();
+            if (!Policy::canEditTags($user)) {
+                return $resp->withStatus(302)->withHeader('Location', '/m/' . $args['id']);
+            }
             $id   = (int)$args['id'];
             $body = (array)($req->getParsedBody() ?? []);
             $tag  = trim($body['tag'] ?? '');
@@ -288,10 +580,87 @@ final class App
             return $resp->withStatus(302)->withHeader('Location', '/m/' . $id);
         });
 
+        // POST /m/{id}/favorite – toggle favorite
+        $app->post('/m/{id:[0-9]+}/favorite', function (Request $req, Response $resp, array $args) {
+            $user = UserService::current();
+            if (!$user) {
+                return $resp->withStatus(302)->withHeader('Location', '/login?next=/m/' . $args['id']);
+            }
+            FavoriteService::toggle((int)$user['id'], (int)$args['id']);
+            return $resp->withStatus(302)->withHeader('Location', '/m/' . $args['id']);
+        });
+
+        // POST /m/{id}/vote
+        $app->post('/m/{id:[0-9]+}/vote', function (Request $req, Response $resp, array $args) {
+            $user = UserService::current();
+            if (!Policy::canVote($user)) {
+                Flash::set('error', 'You must be logged in to vote.');
+                return $resp->withStatus(302)->withHeader('Location', '/m/' . $args['id']);
+            }
+            $body  = (array)($req->getParsedBody() ?? []);
+            $value = (int)($body['value'] ?? 0);
+            if ($value === 1 || $value === -1) {
+                VoteService::cast((int)$user['id'], (int)$args['id'], $value);
+            }
+            return $resp->withStatus(302)->withHeader('Location', '/m/' . $args['id']);
+        });
+
+        // POST /m/{id}/comments
+        $app->post('/m/{id:[0-9]+}/comments', function (Request $req, Response $resp, array $args) {
+            $user    = UserService::current();
+            $mediaId = (int)$args['id'];
+            if (!Policy::canComment($user)) {
+                Flash::set('error', 'You must be logged in to comment.');
+                return $resp->withStatus(302)->withHeader('Location', '/m/' . $mediaId);
+            }
+            $commentLimit = Settings::getInt('rate_limit_comments_per_hour', 30);
+            $commentKey   = RateLimiter::key('comment', $user ? (int)$user['id'] : null);
+            if (!RateLimiter::hit($commentKey, $commentLimit, 3600)) {
+                Flash::set('error', 'Comment rate limit reached. Please wait before commenting again.');
+                return $resp->withStatus(302)->withHeader('Location', '/m/' . $mediaId . '#comments');
+            }
+            $body = (array)($req->getParsedBody() ?? []);
+            try {
+                CommentService::add($mediaId, $user ? (int)$user['id'] : null, $body['body'] ?? '');
+            } catch (\RuntimeException $e) {
+                Flash::set('error', $e->getMessage());
+            }
+            return $resp->withStatus(302)->withHeader('Location', '/m/' . $mediaId . '#comments');
+        });
+
+        // POST /m/{id}/comments/{cid}/delete
+        $app->post('/m/{id:[0-9]+}/comments/{cid:[0-9]+}/delete', function (Request $req, Response $resp, array $args) {
+            $user = UserService::current();
+            if (!$user) {
+                return $resp->withStatus(302)->withHeader('Location', '/login');
+            }
+            $mediaId   = (int)$args['id'];
+            $commentId = (int)$args['cid'];
+            try {
+                CommentService::delete($commentId, $user);
+                ModLog::write('comment.delete', 'comment:' . $commentId, (int)$user['id']);
+            } catch (\RuntimeException $e) {
+                Flash::set('error', $e->getMessage());
+            }
+            return $resp->withStatus(302)->withHeader('Location', '/m/' . $mediaId . '#comments');
+        });
+
         // POST /m/{id}/delete
         $app->post('/m/{id:[0-9]+}/delete', function (Request $req, Response $resp, array $args) {
-            self::requireAdmin($req);
-            MediaService::delete((int)$args['id']);
+            $user    = UserService::current();
+            $mediaId = (int)$args['id'];
+            $media   = MediaService::getById($mediaId);
+            if (!$media) {
+                return $resp->withStatus(404);
+            }
+            $isOwner = $user && (int)($media['uploader_id'] ?? -1) === (int)$user['id'];
+            if (!$isOwner && !Policy::canModerate($user)) {
+                return $resp->withStatus(403);
+            }
+            MediaService::delete($mediaId);
+            if ($user) {
+                ModLog::write('media.delete', 'media:' . $mediaId, (int)$user['id']);
+            }
             return $resp->withStatus(302)->withHeader('Location', '/');
         });
 
@@ -308,14 +677,15 @@ final class App
                 'sidebar_tags' => MediaService::getTagsForMediaSet($mediaIds),
             ]);
             $html = $renderer->render('search', [
-                'title'     => 'Search – plainbooru',
-                'media'     => $data['results'],
-                'total'     => $data['total'],
-                'page'      => $page,
-                'page_size' => $pageSize,
-                'tags'      => $tags,
-                'q'         => $q,
-                'sidebar'   => $sidebar,
+                'title'      => 'Search – plainbooru',
+                'media'      => $data['results'],
+                'total'      => $data['total'],
+                'page'       => $page,
+                'page_size'  => $pageSize,
+                'totalPages' => max(1, (int)ceil($data['total'] / max(1, $pageSize))),
+                'tags'       => $tags,
+                'q'          => $q,
+                'sidebar'    => $sidebar,
             ]);
             $resp->getBody()->write($html);
             return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
@@ -343,14 +713,15 @@ final class App
                 'sidebar_tags' => MediaService::getTagsForMediaSet($mediaIds),
             ]);
             $html = $renderer->render('search', [
-                'title'     => "Tag: $tag – plainbooru",
-                'media'     => $data['results'],
-                'total'     => $data['total'],
-                'page'      => $page,
-                'page_size' => $pageSize,
-                'tags'      => $tag,
-                'q'         => '',
-                'sidebar'   => $sidebar,
+                'title'      => "Tag: $tag – plainbooru",
+                'media'      => $data['results'],
+                'total'      => $data['total'],
+                'page'       => $page,
+                'page_size'  => $pageSize,
+                'totalPages' => max(1, (int)ceil($data['total'] / max(1, $pageSize))),
+                'tags'       => $tag,
+                'q'          => '',
+                'sidebar'    => $sidebar,
             ]);
             $resp->getBody()->write($html);
             return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
@@ -359,11 +730,13 @@ final class App
         // GET /tags
         $app->get('/tags', function (Request $req, Response $resp) use ($renderer) {
             $tags    = MediaService::getAllTags();
-            $sidebar = $renderer->partial('sidebar_tag_search', []);
+            $user    = UserService::current();
+            $sidebar = Policy::canEditTags($user) ? $renderer->partial('sidebar_tag_search', []) : null;
             $html    = $renderer->render('tags', [
-                'title'   => 'Tags – plainbooru',
-                'tags'    => $tags,
-                'sidebar' => $sidebar,
+                'title'        => 'Tags – plainbooru',
+                'tags'         => $tags,
+                'sidebar'      => $sidebar,
+                'can_moderate' => Policy::canModerate($user),
             ]);
             $resp->getBody()->write($html);
             return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
@@ -371,6 +744,11 @@ final class App
 
         // POST /tags – create a standalone tag
         $app->post('/tags', function (Request $req, Response $resp) {
+            $user = UserService::current();
+            if (!Policy::canEditTags($user)) {
+                Flash::set('error', 'You do not have permission to create tags.');
+                return $resp->withStatus(302)->withHeader('Location', '/tags');
+            }
             $params = $req->getParsedBody();
             $name   = trim($params['name'] ?? '');
             if ($name !== '') {
@@ -383,9 +761,10 @@ final class App
             return $resp->withStatus(302)->withHeader('Location', '/tags');
         });
 
-        // POST /tags/{name}/delete
+        // POST /tags/{name}/delete – requires moderator+
         $app->post('/tags/{name}/delete', function (Request $req, Response $resp, array $args) {
-            self::requireAdmin($req);
+            $user = UserService::current();
+            Guard::requireAtLeast('moderator', $user);
             MediaService::deleteTag(urldecode($args['name']));
             return $resp->withStatus(302)->withHeader('Location', '/tags');
         });
@@ -396,16 +775,18 @@ final class App
         $app->get('/pools', function (Request $req, Response $resp) use ($renderer) {
             $params  = $req->getQueryParams();
             $page    = max(1, (int)($params['page'] ?? 1));
-            $data    = PoolService::getList($page, 18);
-            $sidebar = $renderer->partial('sidebar_create_pool', ['error' => null]);
+            $viewer  = UserService::current();
+            $data    = PoolService::getList($page, 18, $viewer ? (int)$viewer['id'] : null, $viewer['role'] ?? 'anonymous');
+            $sidebar = Policy::canCreatePool($viewer) ? $renderer->partial('sidebar_create_pool', ['error' => null]) : null;
             $html    = $renderer->render('pools', [
-                'title'     => 'Pools – plainbooru',
-                'pools'     => $data['results'],
-                'total'     => $data['total'],
-                'page'      => $page,
-                'page_size' => 18,
-                'error'     => null,
-                'sidebar'   => $sidebar,
+                'title'      => 'Pools – plainbooru',
+                'pools'      => $data['results'],
+                'total'      => $data['total'],
+                'page'       => $page,
+                'page_size'  => 18,
+                'totalPages' => max(1, (int)ceil($data['total'] / 18)),
+                'error'      => null,
+                'sidebar'    => $sidebar,
             ]);
             $resp->getBody()->write($html);
             return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
@@ -413,24 +794,30 @@ final class App
 
         // POST /pools
         $app->post('/pools', function (Request $req, Response $resp) use ($renderer) {
-            self::requireAdmin($req);
-            $params = $req->getParsedBody();
-            $name   = trim($params['name'] ?? '');
-            $desc   = trim($params['description'] ?? '') ?: null;
+            $viewer = UserService::current();
+            if (!Policy::canCreatePool($viewer)) {
+                Flash::set('error', 'You do not have permission to create pools.');
+                return $resp->withStatus(302)->withHeader('Location', '/pools');
+            }
+            $params     = $req->getParsedBody();
+            $name       = trim($params['name'] ?? '');
+            $desc       = trim($params['description'] ?? '') ?: null;
+            $visibility = $params['visibility'] ?? 'public';
             try {
-                $pool = PoolService::create($name, $desc);
+                $pool = PoolService::create($name, $desc, $viewer ? (int)$viewer['id'] : null, $visibility);
                 return $resp->withStatus(302)->withHeader('Location', '/pools/' . $pool['id'] . '/edit');
             } catch (\RuntimeException $e) {
-                $data    = PoolService::getList(1, 18);
-                $sidebar = $renderer->partial('sidebar_create_pool', ['error' => $e->getMessage()]);
+                $data    = PoolService::getList(1, 18, $viewer ? (int)$viewer['id'] : null, $viewer['role'] ?? 'anonymous');
+                $sidebar = Policy::canCreatePool($viewer) ? $renderer->partial('sidebar_create_pool', ['error' => $e->getMessage()]) : null;
                 $html    = $renderer->render('pools', [
-                    'title'     => 'Pools – plainbooru',
-                    'pools'     => $data['results'],
-                    'total'     => $data['total'],
-                    'page'      => 1,
-                    'page_size' => 18,
-                    'error'     => $e->getMessage(),
-                    'sidebar'   => $sidebar,
+                    'title'      => 'Pools – plainbooru',
+                    'pools'      => $data['results'],
+                    'total'      => $data['total'],
+                    'page'       => 1,
+                    'page_size'  => 18,
+                    'totalPages' => max(1, (int)ceil($data['total'] / 18)),
+                    'error'      => $e->getMessage(),
+                    'sidebar'    => $sidebar,
                 ]);
                 $resp->getBody()->write($html);
                 return $resp->withStatus(400)->withHeader('Content-Type', 'text/html; charset=utf-8');
@@ -439,8 +826,9 @@ final class App
 
         // GET /pools/{id}/edit — must be before GET /pools/{id}
         $app->get('/pools/{id:[0-9]+}/edit', function (Request $req, Response $resp, array $args) use ($renderer) {
-            $pool = PoolService::getById((int)$args['id']);
-            if (!$pool) {
+            $viewer = UserService::current();
+            $pool   = PoolService::getById((int)$args['id'], $viewer ? (int)$viewer['id'] : null, $viewer['role'] ?? 'anonymous');
+            if (!$pool || !PoolService::canEdit($pool, $viewer ? (int)$viewer['id'] : null, $viewer['role'] ?? 'anonymous')) {
                 $html = $renderer->render('error', ['title' => 'Not Found', 'message' => 'Pool not found.', 'code' => 404]);
                 $resp->getBody()->write($html);
                 return $resp->withStatus(404)->withHeader('Content-Type', 'text/html; charset=utf-8');
@@ -465,13 +853,18 @@ final class App
 
         // POST /pools/{id}/update
         $app->post('/pools/{id:[0-9]+}/update', function (Request $req, Response $resp, array $args) use ($renderer) {
-            self::requireAdmin($req);
+            $viewer = UserService::current();
             $poolId = (int)$args['id'];
-            $params = $req->getParsedBody();
-            $name   = trim($params['name'] ?? '');
-            $desc   = trim($params['description'] ?? '') ?: null;
+            $pool   = PoolService::getById($poolId, $viewer ? (int)$viewer['id'] : null, $viewer['role'] ?? 'anonymous');
+            if (!$pool || !PoolService::canEdit($pool, $viewer ? (int)$viewer['id'] : null, $viewer['role'] ?? 'anonymous')) {
+                return $resp->withStatus(403);
+            }
+            $params     = $req->getParsedBody();
+            $name       = trim($params['name'] ?? '');
+            $desc       = trim($params['description'] ?? '') ?: null;
+            $visibility = $params['visibility'] ?? 'public';
             try {
-                PoolService::update($poolId, $name, $desc);
+                PoolService::update($poolId, $name, $desc, $visibility);
             } catch (\RuntimeException $e) {
                 $pool = PoolService::getById($poolId);
                 $html = $renderer->render('pool_edit', [
@@ -487,8 +880,12 @@ final class App
 
         // POST /pools/{id}/tags – add tag to pool
         $app->post('/pools/{id:[0-9]+}/tags', function (Request $req, Response $resp, array $args) {
-            self::requireAdmin($req);
+            $viewer = UserService::current();
             $poolId = (int)$args['id'];
+            $pool   = PoolService::getById($poolId, $viewer ? (int)$viewer['id'] : null, $viewer['role'] ?? 'anonymous');
+            if (!$pool || !PoolService::canEdit($pool, $viewer ? (int)$viewer['id'] : null, $viewer['role'] ?? 'anonymous')) {
+                return $resp->withStatus(403);
+            }
             $params = $req->getParsedBody();
             $tag    = trim($params['tag'] ?? '');
             if ($tag !== '') {
@@ -503,8 +900,12 @@ final class App
 
         // POST /pools/{id}/tags/remove
         $app->post('/pools/{id:[0-9]+}/tags/remove', function (Request $req, Response $resp, array $args) {
-            self::requireAdmin($req);
+            $viewer = UserService::current();
             $poolId = (int)$args['id'];
+            $pool   = PoolService::getById($poolId, $viewer ? (int)$viewer['id'] : null, $viewer['role'] ?? 'anonymous');
+            if (!$pool || !PoolService::canEdit($pool, $viewer ? (int)$viewer['id'] : null, $viewer['role'] ?? 'anonymous')) {
+                return $resp->withStatus(403);
+            }
             $params = $req->getParsedBody();
             $tag    = trim($params['tag'] ?? '');
             if ($tag !== '') {
@@ -515,8 +916,12 @@ final class App
 
         // POST /pools/{id}/upload – upload one or more files and add to pool
         $app->post('/pools/{id:[0-9]+}/upload', function (Request $req, Response $resp, array $args) use ($renderer) {
-            self::requireAdmin($req);
+            $viewer  = UserService::current();
             $poolId  = (int)$args['id'];
+            $pool_   = PoolService::getById($poolId, $viewer ? (int)$viewer['id'] : null, $viewer['role'] ?? 'anonymous');
+            if (!$pool_ || !PoolService::canEdit($pool_, $viewer ? (int)$viewer['id'] : null, $viewer['role'] ?? 'anonymous')) {
+                return $resp->withStatus(403);
+            }
             $allFiles = $req->getUploadedFiles();
             $params  = $req->getParsedBody();
 
@@ -538,6 +943,7 @@ final class App
                 return $resp->withStatus(400)->withHeader('Content-Type', 'text/html; charset=utf-8');
             }
 
+            $poolUploaderId = UserService::current()['id'] ?? null;
             $errors = [];
             foreach ($uploaded as $file) {
                 $tmpPath = tempnam(sys_get_temp_dir(), 'pb_');
@@ -549,7 +955,7 @@ final class App
                     'error'    => UPLOAD_ERR_OK,
                 ];
                 try {
-                    $media = MediaService::storeFromPath($tmpPath, $phpFile, $params['tags'] ?? '');
+                    $media = MediaService::storeFromPath($tmpPath, $phpFile, $params['tags'] ?? '', $poolUploaderId);
                     PoolService::addItem($poolId, (int)$media['id']);
                 } catch (\RuntimeException $e) {
                     $errors[] = ($file->getClientFilename() ?? 'file') . ': ' . $e->getMessage();
@@ -574,14 +980,19 @@ final class App
 
         // POST /pools/{id}/delete
         $app->post('/pools/{id:[0-9]+}/delete', function (Request $req, Response $resp, array $args) {
-            self::requireAdmin($req);
+            $viewer = UserService::current();
+            $pool   = PoolService::getById((int)$args['id'], $viewer ? (int)$viewer['id'] : null, $viewer['role'] ?? 'anonymous');
+            if (!$pool || !PoolService::canEdit($pool, $viewer ? (int)$viewer['id'] : null, $viewer['role'] ?? 'anonymous')) {
+                return $resp->withStatus(403);
+            }
             PoolService::delete((int)$args['id']);
             return $resp->withStatus(302)->withHeader('Location', '/pools');
         });
 
         // GET /pools/{poolId}/m/{mediaId} — pool-context media viewer
         $app->get('/pools/{poolId:[0-9]+}/m/{mediaId:[0-9]+}', function (Request $req, Response $resp, array $args) use ($renderer) {
-            $pool  = PoolService::getById((int)$args['poolId']);
+            $viewer = UserService::current();
+            $pool   = PoolService::getById((int)$args['poolId'], $viewer ? (int)$viewer['id'] : null, $viewer['role'] ?? 'anonymous');
             $media = MediaService::getById((int)$args['mediaId']);
             if (!$pool || !$media) {
                 $html = $renderer->render('error', ['title' => 'Not Found', 'message' => 'Not found.', 'code' => 404]);
@@ -593,16 +1004,17 @@ final class App
             $poolPrev = ($idx !== false && $idx > 0)                   ? $items[$idx - 1] : null;
             $poolNext = ($idx !== false && $idx < count($items) - 1)   ? $items[$idx + 1] : null;
             $html = $renderer->render('post_pool', [
-                'title'      => 'Post #' . $media['id'] . ' – ' . $pool['name'] . ' – plainbooru',
-                'media'      => $media,
-                'pools'      => PoolService::getPoolsForMedia((int)$args['mediaId']),
-                'pool'       => $pool,
-                'pool_prev'  => $poolPrev,
-                'pool_next'  => $poolNext,
-                'pool_pos'   => $idx !== false ? $idx + 1 : '?',
-                'pool_total' => count($items),
-                'bodyClass'  => 'overflow-hidden',
-                'mainClass'  => 'flex-1 flex overflow-hidden',
+                'title'         => 'Post #' . $media['id'] . ' – ' . $pool['name'] . ' – plainbooru',
+                'media'         => $media,
+                'pools'         => PoolService::getPoolsForMedia((int)$args['mediaId']),
+                'pool'          => $pool,
+                'pool_prev'     => $poolPrev,
+                'pool_next'     => $poolNext,
+                'pool_pos'      => $idx !== false ? $idx + 1 : '?',
+                'pool_total'    => count($items),
+                'can_edit_tags' => Policy::canEditTags($viewer),
+                'bodyClass'     => 'h-full overflow-hidden',
+                'mainClass'     => 'flex-1 min-h-0 flex overflow-hidden',
             ]);
             $resp->getBody()->write($html);
             return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
@@ -610,7 +1022,8 @@ final class App
 
         // GET /pools/{id}
         $app->get('/pools/{id:[0-9]+}', function (Request $req, Response $resp, array $args) use ($renderer) {
-            $pool = PoolService::getById((int)$args['id']);
+            $viewer = UserService::current();
+            $pool   = PoolService::getById((int)$args['id'], $viewer ? (int)$viewer['id'] : null, $viewer['role'] ?? 'anonymous');
             if (!$pool) {
                 $html = $renderer->render('error', ['title' => 'Not Found', 'message' => 'Pool not found.', 'code' => 404]);
                 $resp->getBody()->write($html);
@@ -641,8 +1054,12 @@ final class App
 
         // POST /pools/{id}/items
         $app->post('/pools/{id:[0-9]+}/items', function (Request $req, Response $resp, array $args) use ($renderer) {
-            self::requireAdmin($req);
-            $poolId  = (int)$args['id'];
+            $viewer = UserService::current();
+            $poolId = (int)$args['id'];
+            $pool__ = PoolService::getById($poolId, $viewer ? (int)$viewer['id'] : null, $viewer['role'] ?? 'anonymous');
+            if (!$pool__ || !PoolService::canEdit($pool__, $viewer ? (int)$viewer['id'] : null, $viewer['role'] ?? 'anonymous')) {
+                return $resp->withStatus(403);
+            }
             $params  = $req->getParsedBody();
             $mediaId = (int)($params['media_id'] ?? 0);
             $pos     = isset($params['position']) && $params['position'] !== '' ? (int)$params['position'] : null;
@@ -663,8 +1080,12 @@ final class App
 
         // POST /pools/{id}/reorder
         $app->post('/pools/{id:[0-9]+}/reorder', function (Request $req, Response $resp, array $args) {
-            self::requireAdmin($req);
+            $viewer = UserService::current();
             $poolId = (int)$args['id'];
+            $pool_r = PoolService::getById($poolId, $viewer ? (int)$viewer['id'] : null, $viewer['role'] ?? 'anonymous');
+            if (!$pool_r || !PoolService::canEdit($pool_r, $viewer ? (int)$viewer['id'] : null, $viewer['role'] ?? 'anonymous')) {
+                return $resp->withStatus(403);
+            }
             $params = $req->getParsedBody();
             $mediaIds = [];
             if (!empty($params['item_ids'])) {
@@ -683,12 +1104,15 @@ final class App
 
         // POST /pools/{id}/move – shift one item one position left or right
         $app->post('/pools/{id:[0-9]+}/move', function (Request $req, Response $resp, array $args) {
-            self::requireAdmin($req);
+            $viewer    = UserService::current();
             $poolId    = (int)$args['id'];
+            $pool      = PoolService::getById($poolId, $viewer ? (int)$viewer['id'] : null, $viewer['role'] ?? 'anonymous');
+            if (!$pool || !PoolService::canEdit($pool, $viewer ? (int)$viewer['id'] : null, $viewer['role'] ?? 'anonymous')) {
+                return $resp->withStatus(403);
+            }
             $params    = $req->getParsedBody();
             $mediaId   = (int)($params['media_id'] ?? 0);
             $direction = $params['direction'] ?? '';
-            $pool      = PoolService::getById($poolId);
             $ids       = array_column($pool['items'] ?? [], 'id');
             $idx       = array_search($mediaId, $ids);
             if ($idx !== false) {
@@ -704,8 +1128,12 @@ final class App
 
         // POST /pools/{id}/remove
         $app->post('/pools/{id:[0-9]+}/remove', function (Request $req, Response $resp, array $args) {
-            self::requireAdmin($req);
+            $viewer  = UserService::current();
             $poolId  = (int)$args['id'];
+            $pool_rm = PoolService::getById($poolId, $viewer ? (int)$viewer['id'] : null, $viewer['role'] ?? 'anonymous');
+            if (!$pool_rm || !PoolService::canEdit($pool_rm, $viewer ? (int)$viewer['id'] : null, $viewer['role'] ?? 'anonymous')) {
+                return $resp->withStatus(403);
+            }
             $params  = $req->getParsedBody();
             $mediaId = (int)($params['media_id'] ?? 0);
             PoolService::removeItem($poolId, $mediaId);
@@ -762,6 +1190,13 @@ final class App
 
         // POST /api/v1/media
         $app->post('/api/v1/media', function (Request $req, Response $resp) {
+            $apiUser  = $req->getAttribute('api_user');
+            $apiLimit = Settings::getInt('rate_limit_api_per_minute', 300);
+            $apiKey   = RateLimiter::key('api', $apiUser ? (int)$apiUser['id'] : null);
+            if (!RateLimiter::hit($apiKey, $apiLimit, 60)) {
+                return self::jsonResp($resp, ['error' => 'Rate limit exceeded.'], 429);
+            }
+
             $files = $req->getUploadedFiles();
             /** @var UploadedFileInterface|null $file */
             $file  = $files['file'] ?? null;
@@ -905,6 +1340,74 @@ final class App
             return self::jsonResp($resp, ['deleted' => $deleted], $deleted ? 200 : 404);
         });
 
+        // ── Admin: user management ────────────────────────────────────────────
+
+        // GET /admin/users
+        $app->get('/admin/users', function (Request $req, Response $resp) use ($renderer) {
+            $user = UserService::current();
+            Guard::requireAtLeast('admin', $user);
+            $pdo   = Db::get();
+            $users = $pdo->query('SELECT id, username, role, created_at, banned_at FROM users ORDER BY id ASC')->fetchAll();
+            $html  = $renderer->render('admin/users', [
+                'title' => 'Users – Admin – plainbooru',
+                'users' => $users,
+            ]);
+            $resp->getBody()->write($html);
+            return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
+        });
+
+        // POST /admin/users/{id}/role
+        $app->post('/admin/users/{id:[0-9]+}/role', function (Request $req, Response $resp, array $args) {
+            $actor = UserService::current();
+            Guard::requireAtLeast('admin', $actor);
+            $body   = (array)($req->getParsedBody() ?? []);
+            $role   = trim($body['role'] ?? '');
+            try {
+                UserService::setRole((int)$args['id'], $role, $actor);
+                Flash::set('success', 'Role updated.');
+            } catch (\RuntimeException $e) {
+                Flash::set('error', $e->getMessage());
+            }
+            return $resp->withStatus(302)->withHeader('Location', '/admin/users');
+        });
+
+        // POST /admin/users/{id}/ban
+        $app->post('/admin/users/{id:[0-9]+}/ban', function (Request $req, Response $resp, array $args) {
+            $actor = UserService::current();
+            Guard::requireAtLeast('moderator', $actor);
+            $body   = (array)($req->getParsedBody() ?? []);
+            $reason = trim($body['reason'] ?? '') ?: null;
+            try {
+                UserService::ban((int)$args['id'], $reason, $actor);
+                Flash::set('success', 'User banned.');
+            } catch (\RuntimeException $e) {
+                Flash::set('error', $e->getMessage());
+            }
+            return $resp->withStatus(302)->withHeader('Location', '/admin/users');
+        });
+
+        // GET /admin/mod-log
+        $app->get('/admin/mod-log', function (Request $req, Response $resp) use ($renderer) {
+            $user = UserService::current();
+            Guard::requireAtLeast('moderator', $user);
+            $params = $req->getQueryParams();
+            $page   = max(1, (int)($params['page'] ?? 1));
+            $limit  = 50;
+            $offset = ($page - 1) * $limit;
+            $entries = ModLog::recent($limit, $offset);
+            $total   = (int)Db::get()->query('SELECT COUNT(*) FROM mod_log')->fetchColumn();
+            $html = $renderer->render('admin/mod_log', [
+                'title'      => 'Mod Log – Admin – plainbooru',
+                'entries'    => $entries,
+                'total'      => $total,
+                'page'       => $page,
+                'page_size'  => $limit,
+                'totalPages' => max(1, (int)ceil($total / max(1, $limit))),
+            ]);
+            $resp->getBody()->write($html);
+            return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
+        });
+
         return $app;
     }
 
@@ -959,6 +1462,12 @@ final class App
 
     private static function requireAdminApi(Request $req, Response $resp): void
     {
+        // Accept bearer token with admin role
+        $apiUser = $req->getAttribute('api_user');
+        if ($apiUser !== null && Guard::atLeast('admin', $apiUser)) {
+            return;
+        }
+        // Fall back to legacy admin secret
         self::requireAdmin($req);
     }
 

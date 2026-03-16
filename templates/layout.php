@@ -4,26 +4,38 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title><?= $this->e($title ?? 'plainbooru') ?></title>
+  <title><?= $this->e($title ?? $site_title ?? 'plainbooru') ?></title>
   <link rel="stylesheet" href="/assets/app.css?v=<?= filemtime($_SERVER['DOCUMENT_ROOT'] . '/assets/app.css') ?>">
 </head>
-<body class="<?= isset($sidebar) ? 'h-full overflow-hidden' : 'min-h-full' ?> bg-background text-foreground flex flex-col <?= $this->e($bodyClass ?? '') ?>">
+<body class="<?= isset($bodyClass) ? $this->e($bodyClass) : (isset($sidebar) ? 'h-full overflow-hidden' : 'min-h-full') ?> bg-background text-foreground flex flex-col">
 
   <!-- Navbar -->
   <header class="sticky top-0 z-50 w-full border-b border-border bg-background/95 backdrop-blur">
     <div class="container mx-auto flex h-14 max-w-7xl items-center gap-4 px-4">
-      <a href="/" class="text-xl font-bold">plainbooru</a>
+      <a href="/" class="text-xl font-bold"><?= $this->e($site_title ?? 'plainbooru') ?></a>
       <nav class="hidden md:flex gap-1 flex-1 items-center">
         <a href="/tags" class="btn-ghost text-sm px-3 py-1 rounded-md hover:bg-accent">Tags</a>
         <a href="/pools" class="btn-ghost text-sm px-3 py-1 rounded-md hover:bg-accent">Pools</a>
-        <a href="/upload" class="btn-ghost text-sm px-3 py-1 rounded-md hover:bg-accent">Upload</a>
+        <?php if ($can_upload): ?>
+          <a href="/upload" class="btn-ghost text-sm px-3 py-1 rounded-md hover:bg-accent">Upload</a>
+        <?php endif; ?>
         <?php if ($currentUser ?? null): ?>
+          <?php $role = $currentUser['role'] ?? ''; ?>
           <details class="dropdown">
             <summary class="btn-ghost text-sm px-3 py-1 rounded-md hover:bg-accent cursor-pointer list-none"><?= $this->e($currentUser['username']) ?></summary>
             <ul>
-              <li><a href="/settings">Settings</a></li>
+              <li><a href="/settings/account">Account</a></li>
+              <li><a href="/settings/tokens">API Tokens</a></li>
+              <?php if (in_array($role, ['moderator', 'admin'], true)): ?>
+                <li><a href="/admin/mod-log">Mod log</a></li>
+              <?php endif; ?>
+              <?php if ($role === 'admin'): ?>
+                <li><a href="/admin/users">Users</a></li>
+                <li><a href="/admin/settings">Site settings</a></li>
+              <?php endif; ?>
               <li>
                 <form action="/logout" method="post">
+                  <?= $this->csrfInput() ?>
                   <button type="submit">Log out</button>
                 </form>
               </li>
@@ -38,6 +50,7 @@
         <button type="submit" class="btn-sm-primary">Go</button>
       </form>
       <form action="/theme" method="post">
+        <?= $this->csrfInput() ?>
         <input type="hidden" name="theme" value="<?= $isDark ? 'light' : 'dark' ?>">
         <input type="hidden" name="return" value="<?= $this->e($_SERVER['REQUEST_URI'] ?? '/') ?>">
         <button type="submit" class="btn-ghost h-8 w-8 flex items-center justify-center rounded-md" title="Toggle dark mode">
@@ -55,15 +68,27 @@
   <div class="flex md:hidden gap-1 px-2 border-b border-border bg-background overflow-x-auto sticky top-14 z-40 h-10 items-center">
     <a href="/tags" class="text-xs px-2 py-1 rounded hover:bg-accent">Tags</a>
     <a href="/pools" class="text-xs px-2 py-1 rounded hover:bg-accent">Pools</a>
-    <a href="/upload" class="text-xs px-2 py-1 rounded hover:bg-accent">Upload</a>
+    <?php if ($can_upload): ?>
+      <a href="/upload" class="text-xs px-2 py-1 rounded hover:bg-accent">Upload</a>
+    <?php endif; ?>
     <span class="flex-1"></span>
     <?php if ($currentUser ?? null): ?>
+      <?php $role = $currentUser['role'] ?? ''; ?>
       <details class="dropdown">
         <summary class="text-xs px-2 py-1 rounded hover:bg-accent cursor-pointer list-none"><?= $this->e($currentUser['username']) ?></summary>
         <ul dir="rtl">
-          <li><a href="/settings">Settings</a></li>
+          <li><a href="/settings/account">Account</a></li>
+          <li><a href="/settings/tokens">API Tokens</a></li>
+          <?php if (in_array($role, ['moderator', 'admin'], true)): ?>
+            <li><a href="/admin/mod-log">Mod log</a></li>
+          <?php endif; ?>
+          <?php if ($role === 'admin'): ?>
+            <li><a href="/admin/users">Users</a></li>
+            <li><a href="/admin/settings">Site settings</a></li>
+          <?php endif; ?>
           <li>
             <form action="/logout" method="post">
+              <?= $this->csrfInput() ?>
               <button type="submit">Log out</button>
             </form>
           </li>
@@ -73,6 +98,20 @@
       <a href="/login" class="text-xs px-2 py-1 rounded hover:bg-accent">Log in</a>
     <?php endif; ?>
   </div>
+
+  <!-- Flash messages -->
+  <?php if (!empty($flash)): ?>
+    <div class="container mx-auto max-w-7xl px-4 pt-4 flex flex-col gap-2">
+      <?php foreach ($flash as $msg): ?>
+        <?php $isError = ($msg['type'] === 'error'); ?>
+        <div class="rounded-md border px-4 py-3 text-sm <?= $isError
+            ? 'border-destructive/40 bg-destructive/10 text-destructive'
+            : 'border-border bg-muted text-foreground' ?>">
+          <?= $this->e($msg['message']) ?>
+        </div>
+      <?php endforeach; ?>
+    </div>
+  <?php endif; ?>
 
   <!-- Content -->
   <?php if (isset($sidebar)): ?>

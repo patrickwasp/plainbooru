@@ -1,6 +1,5 @@
 <?php
 // search.php
-$totalPages = (int)ceil($total / $page_size);
 ?>
 <div class="flex flex-col gap-4">
 
@@ -27,33 +26,14 @@ $totalPages = (int)ceil($total / $page_size);
   <?php else: ?>
     <div class="media-grid">
       <?php foreach ($media as $m): ?>
-        <a href="/m/<?= (int)$m['id'] ?>" class="relative block rounded overflow-hidden hover:opacity-90 transition-opacity group">
-          <div class="aspect-square bg-muted overflow-hidden">
-            <img src="/thumb/<?= (int)$m['id'] ?>" alt="Post #<?= (int)$m['id'] ?>"
-                 class="w-full h-full object-cover" loading="lazy">
-          </div>
-          <?php if (($m['kind'] ?? '') === 'video'): ?>
-            <span class="absolute top-1 left-1 bg-black/65 text-white text-xs w-5 h-5 flex items-center justify-center rounded leading-none pointer-events-none">▶</span>
-          <?php endif; ?>
-        </a>
+        <?= $this->partial('media_card', ['m' => $m]) ?>
       <?php endforeach; ?>
     </div>
 
-    <!-- Pagination -->
-    <?php if ($totalPages > 1): ?>
-      <?php
-        $qs = http_build_query(array_filter(['tags' => $tags, 'q' => $q]));
-        $sep = $qs ? '&' : '';
-      ?>
-      <div class="flex justify-center gap-1 mt-6">
-        <?php if ($page > 1): ?>
-          <a href="/search?<?= $qs ?><?= $sep ?>page=<?= $page - 1 ?>" class="btn-sm-outline">← Prev</a>
-        <?php endif; ?>
-        <span class="btn-sm-outline opacity-50 cursor-default"><?= $page ?> / <?= $totalPages ?></span>
-        <?php if ($page < $totalPages): ?>
-          <a href="/search?<?= $qs ?><?= $sep ?>page=<?= $page + 1 ?>" class="btn-sm-outline">Next →</a>
-        <?php endif; ?>
-      </div>
-    <?php endif; ?>
+    <?php
+      $qs   = http_build_query(array_filter(['tags' => $tags, 'q' => $q]));
+      $base = '/search?' . ($qs ? $qs . '&' : '');
+    ?>
+    <?= $this->partial('pagination', ['page' => $page, 'totalPages' => $totalPages, 'base' => $base]) ?>
   <?php endif; ?>
 </div>

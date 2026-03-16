@@ -15,6 +15,7 @@
       </a>
     </div>
     <form action="/pools/<?= (int)$pool['id'] ?>/delete" method="post">
+      <?= $this->csrfInput() ?>
       <button type="submit" class="btn-destructive btn-sm">Delete Pool</button>
     </form>
   </div>
@@ -30,6 +31,7 @@
       <h2 class="text-sm font-semibold">Rename &amp; Description</h2>
     </div>
     <form action="/pools/<?= (int)$pool['id'] ?>/update" method="post" class="flex flex-col gap-4 p-5">
+      <?= $this->csrfInput() ?>
       <div class="grid sm:grid-cols-2 gap-4">
         <div class="flex flex-col gap-1.5">
           <label class="text-sm font-medium">Name</label>
@@ -42,6 +44,14 @@
           </label>
           <input type="text" name="description" value="<?= $this->e($pool['description'] ?? '') ?>" class="input h-9 text-sm" placeholder="Short description…">
         </div>
+      </div>
+      <div class="flex flex-col gap-1.5 max-w-[180px]">
+        <label class="text-sm font-medium" for="visibility">Visibility</label>
+        <select id="visibility" name="visibility" class="input h-9 text-sm">
+          <option value="public"<?= ($pool['visibility'] ?? 'public') === 'public' ? ' selected' : '' ?>>Public</option>
+          <option value="private"<?= ($pool['visibility'] ?? 'public') === 'private' ? ' selected' : '' ?>>Private</option>
+        </select>
+        <p class="text-xs text-muted-foreground">Private pools are only visible to you and moderators.</p>
       </div>
       <div>
         <button type="submit" class="btn-sm-primary">Save changes</button>
@@ -62,6 +72,7 @@
             <span class="badge-outline inline-flex items-center gap-1 text-xs py-0.5 px-2">
               <?= $this->e($tag) ?>
               <form action="/pools/<?= (int)$pool['id'] ?>/tags/remove" method="post" class="inline leading-none">
+                <?= $this->csrfInput() ?>
                 <input type="hidden" name="tag" value="<?= $this->e($tag) ?>">
                 <button type="submit" class="text-muted-foreground hover:text-destructive leading-none" title="Remove tag">
                   <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
@@ -72,6 +83,7 @@
         </div>
       <?php endif; ?>
       <form action="/pools/<?= (int)$pool['id'] ?>/tags" method="post" class="flex gap-2">
+        <?= $this->csrfInput() ?>
         <input type="text" name="tag" placeholder="Add a tag…" class="input h-9 text-sm flex-1">
         <button type="submit" class="btn-sm-outline">Add</button>
       </form>
@@ -120,6 +132,7 @@
 
               <!-- Delete – top right -->
               <form action="/pools/<?= (int)$pool['id'] ?>/remove" method="post" class="absolute top-1 right-1">
+                <?= $this->csrfInput() ?>
                 <input type="hidden" name="media_id" value="<?= (int)$item['id'] ?>">
                 <button type="submit" title="Remove from pool" class="bg-black/65 text-white text-xs w-5 h-5 flex items-center justify-center rounded leading-none hover:bg-destructive transition-colors">
                   <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
@@ -129,6 +142,7 @@
               <!-- Move left – bottom left -->
               <?php if ($idx > 0): ?>
                 <form action="/pools/<?= (int)$pool['id'] ?>/move" method="post" class="absolute bottom-1 left-1">
+                  <?= $this->csrfInput() ?>
                   <input type="hidden" name="media_id" value="<?= (int)$item['id'] ?>">
                   <input type="hidden" name="direction" value="prev">
                   <button type="submit" title="Move left" class="bg-black/65 text-white w-5 h-5 flex items-center justify-center rounded leading-none hover:bg-black/90 transition-colors">
@@ -140,6 +154,7 @@
               <!-- Move right – bottom right -->
               <?php if ($idx < $itemCount - 1): ?>
                 <form action="/pools/<?= (int)$pool['id'] ?>/move" method="post" class="absolute bottom-1 right-1">
+                  <?= $this->csrfInput() ?>
                   <input type="hidden" name="media_id" value="<?= (int)$item['id'] ?>">
                   <input type="hidden" name="direction" value="next">
                   <button type="submit" title="Move right" class="bg-black/65 text-white w-5 h-5 flex items-center justify-center rounded leading-none hover:bg-black/90 transition-colors">
@@ -167,6 +182,7 @@
 
       <!-- Search form -->
       <form action="/pools/<?= (int)$pool['id'] ?>/media-search" method="post" class="flex gap-2">
+        <?= $this->csrfInput() ?>
         <input type="text" name="search_tags"
                value="<?= $this->e($search_tags ?? '') ?>"
                placeholder="Search by tags…"
@@ -207,6 +223,7 @@
                   </div>
                 <?php else: ?>
                   <form action="/pools/<?= (int)$pool['id'] ?>/items" method="post" class="absolute top-1 right-1">
+                    <?= $this->csrfInput() ?>
                     <input type="hidden" name="media_id" value="<?= (int)$item['id'] ?>">
                     <input type="hidden" name="return" value="<?= $this->e($returnUrl) ?>">
                     <button type="submit" title="Add to pool"

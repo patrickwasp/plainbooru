@@ -1,6 +1,5 @@
 <?php
 // pools.php
-$totalPages = (int)ceil($total / $page_size);
 ?>
 <div>
   <?php if (empty($pools)): ?>
@@ -21,6 +20,9 @@ $totalPages = (int)ceil($total / $page_size);
           <footer class="px-3 py-2 flex flex-col gap-1 text-sm">
             <div class="flex items-center gap-2 w-full">
               <span class="font-semibold text-sm truncate flex-1"><?= $this->e($pool['name']) ?></span>
+              <?php if (($pool['visibility'] ?? 'public') === 'private'): ?>
+                <span class="badge text-xs shrink-0">Private</span>
+              <?php endif; ?>
               <span class="badge-outline text-xs shrink-0"><?= (int)($pool['items_count'] ?? 0) ?></span>
             </div>
             <?php if (!empty($topTags)): ?>
@@ -35,17 +37,6 @@ $totalPages = (int)ceil($total / $page_size);
       <?php endforeach; ?>
     </div>
 
-    <!-- Pagination -->
-    <?php if ($totalPages > 1): ?>
-      <div class="flex justify-center gap-1 mt-6">
-        <?php if ($page > 1): ?>
-          <a href="/pools?page=<?= $page - 1 ?>" class="btn-sm-outline">← Prev</a>
-        <?php endif; ?>
-        <span class="btn-sm-outline opacity-50 cursor-default"><?= $page ?> / <?= $totalPages ?></span>
-        <?php if ($page < $totalPages): ?>
-          <a href="/pools?page=<?= $page + 1 ?>" class="btn-sm-outline">Next →</a>
-        <?php endif; ?>
-      </div>
-    <?php endif; ?>
+    <?= $this->partial('pagination', ['page' => $page, 'totalPages' => $totalPages, 'base' => '/pools?']) ?>
   <?php endif; ?>
 </div>

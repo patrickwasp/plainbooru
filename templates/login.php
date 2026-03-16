@@ -1,17 +1,13 @@
 <div class="w-full max-w-sm mx-auto">
 
-  <?php if (isset($error) && $error): ?>
-    <div class="mb-4 rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-      <?= $this->e($error) ?>
-    </div>
+  <?php if (!empty($error)): ?>
+    <?= $this->partial('alert_error', ['error' => $error]) ?>
   <?php endif; ?>
 
   <div class="rounded-lg border bg-card p-8 shadow-sm">
-    <div class="mb-6">
-      <h1 class="text-lg font-semibold">Log in</h1>
-    </div>
 
     <form class="form grid gap-5" action="/login" method="post">
+      <?= $this->csrfInput() ?>
       <input type="hidden" name="next" value="<?= $this->e($next ?? '/') ?>">
 
       <div class="grid gap-2">

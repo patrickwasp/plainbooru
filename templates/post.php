@@ -2,24 +2,39 @@
 <?php $lb = 'lb-' . (int)$media['id']; ?>
 <div class="flex flex-1 overflow-hidden w-full">
 
-  <!-- Media -->
-  <div class="flex-1 min-w-0 flex items-center justify-center p-6 overflow-hidden">
-    <?php if ($media['kind'] === 'image'): ?>
-      <a href="#<?= $lb ?>" class="block max-w-full max-h-full cursor-zoom-in">
-        <img src="/file/<?= (int)$media['id'] ?>"
-             alt="Post #<?= (int)$media['id'] ?>"
-             class="max-w-full max-h-[calc(100dvh-3.5rem-3rem)] object-contain rounded-sm">
-      </a>
-    <?php else: ?>
-      <video controls preload="metadata" class="max-w-full max-h-[calc(100dvh-3.5rem-3rem)] rounded-sm"
-             poster="/thumb/<?= (int)$media['id'] ?>">
-        <source src="/file/<?= (int)$media['id'] ?>" type="<?= $this->e($media['mime']) ?>">
-        Your browser does not support video playback.
-      </video>
-    <?php endif; ?>
+  <!-- Left: scrollable column — media viewer + comments -->
+  <div class="flex-1 min-w-0 overflow-y-auto flex flex-col">
+
+    <!-- Media: centered, takes as much height as available -->
+    <div class="flex items-center justify-center p-6 h-[calc(100dvh-3.5rem)] shrink-0">
+      <?php if ($media['kind'] === 'image'): ?>
+        <a href="#<?= $lb ?>" class="block max-w-full cursor-zoom-in">
+          <img src="/file/<?= (int)$media['id'] ?>"
+               alt="Post #<?= (int)$media['id'] ?>"
+               class="max-w-full max-h-[calc(100dvh-3.5rem-3rem)] object-contain rounded-sm">
+        </a>
+      <?php else: ?>
+        <video controls preload="metadata" class="max-w-full max-h-[calc(100dvh-3.5rem-3rem)] rounded-sm"
+               poster="/thumb/<?= (int)$media['id'] ?>">
+          <source src="/file/<?= (int)$media['id'] ?>" type="<?= $this->e($media['mime']) ?>">
+          Your browser does not support video playback.
+        </video>
+      <?php endif; ?>
+    </div>
+
+    <!-- Comments -->
+    <div class="w-full">
+      <?= $this->partial('post_comments', [
+          'media'        => $media,
+          'comments'     => $comments,
+          'can_comment'  => $can_comment,
+          'currentUser'  => $currentUser,
+      ]) ?>
+    </div>
+
   </div>
 
-  <!-- Right sidebar: fixed to right edge of viewport -->
+  <!-- Right sidebar -->
   <aside class="w-64 shrink-0 border-l border-border flex flex-col">
 
     <!-- Tags: scrollable fill -->
@@ -31,10 +46,13 @@
           <?php foreach ($sortedTags as $tag): ?>
             <span class="badge-outline flex items-center gap-0.5 text-xs">
               <a href="/t/<?= urlencode($tag) ?>" class="hover:underline"><?= $this->e($tag) ?></a>
-              <form action="/m/<?= (int)$media['id'] ?>/tags/remove" method="post" class="inline">
-                <input type="hidden" name="tag" value="<?= $this->e($tag) ?>">
-                <button type="submit" class="text-muted-foreground hover:text-destructive leading-none px-0.5">×</button>
-              </form>
+              <?php if ($can_edit_tags): ?>
+                <form action="/m/<?= (int)$media['id'] ?>/tags/remove" method="post" class="inline">
+                  <?= $this->csrfInput() ?>
+                  <input type="hidden" name="tag" value="<?= $this->e($tag) ?>">
+                  <button type="submit" class="text-muted-foreground hover:text-destructive leading-none px-0.5">×</button>
+                </form>
+              <?php endif; ?>
             </span>
           <?php endforeach; ?>
         </div>
@@ -53,25 +71,66 @@
         </div>
       <?php endif; ?>
 
-      <form action="/m/<?= (int)$media['id'] ?>/tags" method="post" class="flex gap-1 mt-auto">
-        <input type="text" name="tag" placeholder="Add tag…"
-               class="input h-8 text-sm flex-1 min-w-0">
-        <button type="submit" class="btn-sm-icon-outline">
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+      <?php if ($can_edit_tags): ?>
+        <form action="/m/<?= (int)$media['id'] ?>/tags" method="post" class="flex gap-1 mt-auto">
+          <?= $this->csrfInput() ?>
+          <input type="text" name="tag" placeholder="Add tag…"
+                 class="input h-8 text-sm flex-1 min-w-0">
+          <button type="submit" class="btn-sm-icon-outline">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+          </button>
+        </form>
+      <?php endif; ?>
+    </div>
+
+    <!-- Social: favorites + votes -->
+    <div class="shrink-0 border-t border-border px-5 py-3 flex items-center gap-3">
+
+      <!-- Favorite toggle -->
+      <form action="/m/<?= (int)$media['id'] ?>/favorite" method="post" class="contents">
+        <?= $this->csrfInput() ?>
+        <button type="submit"
+                class="flex items-center text-xs btn-ghost px-2 py-1 rounded <?= $is_favorited ? 'text-yellow-500' : 'text-muted-foreground' ?>"
+                title="<?= $is_favorited ? 'Remove from favorites' : 'Add to favorites' ?>">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+               fill="<?= $is_favorited ? 'currentColor' : 'none' ?>"
+               stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+          </svg>
         </button>
       </form>
+
+      <!-- Votes -->
+      <?php if ($can_vote): ?>
+        <div class="flex items-center gap-1 ml-auto">
+          <form action="/m/<?= (int)$media['id'] ?>/vote" method="post" class="contents">
+            <?= $this->csrfInput() ?>
+            <input type="hidden" name="value" value="1">
+            <button type="submit"
+                    class="btn-ghost px-1.5 py-1 rounded text-xs <?= $user_vote === 1 ? 'text-green-500' : 'text-muted-foreground' ?>"
+                    title="Upvote">▲</button>
+          </form>
+          <span class="text-xs font-mono w-6 text-center"><?= (int)$vote_score ?></span>
+          <form action="/m/<?= (int)$media['id'] ?>/vote" method="post" class="contents">
+            <?= $this->csrfInput() ?>
+            <input type="hidden" name="value" value="-1">
+            <button type="submit"
+                    class="btn-ghost px-1.5 py-1 rounded text-xs <?= $user_vote === -1 ? 'text-red-500' : 'text-muted-foreground' ?>"
+                    title="Downvote">▼</button>
+          </form>
+        </div>
+      <?php else: ?>
+        <span class="text-xs text-muted-foreground ml-auto"><?= (int)$vote_score > 0 ? '+' : '' ?><?= (int)$vote_score ?></span>
+      <?php endif; ?>
+
     </div>
 
     <!-- Details: pinned to bottom, accordion opens upward -->
     <?php
-      $bytes = (int)$media['size_bytes'];
-      $units = ['B', 'KB', 'MB', 'GB', 'TB'];
-      $i = 0;
-      while ($bytes >= 1024 && $i < count($units) - 1) { $bytes /= 1024; $i++; }
       $_rows = [
           ['ID',       '#' . (int)$media['id']],
           ['Type',     $this->e($media['mime'])],
-          ['Size',     number_format($bytes, 2) . ' ' . $units[$i]],
+          ['Size',     $this->formatBytes((int)$media['size_bytes'])],
       ];
       if ($media['width'] && $media['height']) {
           $_rows[] = ['Dimensions', (int)$media['width'] . ' × ' . (int)$media['height']];
@@ -85,9 +144,12 @@
       <div role="group" class="button-group w-full">
         <a href="/file/<?= $_id ?>" download class="btn-sm-outline flex-1 justify-center">Download</a>
         <a href="/api/v1/media/<?= $_id ?>" class="btn-sm-outline" target="_blank">JSON ↗</a>
-        <form action="/m/<?= $_id ?>/delete" method="post">
-          <button type="submit" class="btn-sm-destructive">Delete</button>
-        </form>
+        <?php if ($can_moderate || $is_owner): ?>
+          <form action="/m/<?= $_id ?>/delete" method="post">
+            <?= $this->csrfInput() ?>
+            <button type="submit" class="btn-sm-destructive">Delete</button>
+          </form>
+        <?php endif; ?>
       </div>
       <?php $_actions = ob_get_clean(); ?>
     <div class="shrink-0 border-t">

@@ -9,21 +9,25 @@ use Plainbooru\Media\MediaService;
 
 final class PoolService
 {
-    public static function create(string $name, ?string $description = null): array
+    public static function create(string $name, ?string $description = null, ?int $creatorId = null, string $visibility = 'public'): array
     {
-        $name = trim($name);
+        $name       = trim($name);
+        $visibility = self::normaliseVisibility($visibility);
         if ($name === '') {
             throw new \RuntimeException('Pool name cannot be empty.');
         }
         $pdo = Db::get();
-        $now = date('c');
-        $stmt = $pdo->prepare('INSERT INTO pools (name, description, created_at) VALUES (?, ?, ?)');
-        $stmt->execute([$name, $description, $now]);
-        $id = (int)$pdo->lastInsertId();
-        return self::getById($id);
+        $now = gmdate('Y-m-d\TH:i:s\Z');
+        $pdo->prepare('INSERT INTO pools (name, description, creator_id, visibility, created_at) VALUES (?, ?, ?, ?, ?)')
+            ->execute([$name, $description, $creatorId, $visibility, $now]);
+        return self::getById((int)$pdo->lastInsertId());
     }
 
-    public static function getById(int $id): ?array
+    /**
+     * Load a pool. Pass $viewerUserId to enforce private visibility:
+     * private pools are only visible to their creator, moderators, and admins.
+     */
+    public static function getById(int $id, ?int $viewerUserId = null, string $viewerRole = 'anonymous'): ?array
     {
         $pdo  = Db::get();
         $stmt = $pdo->prepare('SELECT * FROM pools WHERE id = ?');
@@ -32,29 +36,60 @@ final class PoolService
         if (!$pool) {
             return null;
         }
+        if (!self::canView($pool, $viewerUserId, $viewerRole)) {
+            return null;
+        }
         $pool['items'] = self::getItems($id);
         $pool['tags']  = self::getTags($id);
         return $pool;
     }
 
-    public static function getList(int $page = 1, int $pageSize = 20): array
+    public static function getList(int $page = 1, int $pageSize = 20, ?int $viewerUserId = null, string $viewerRole = 'anonymous'): array
     {
         $pdo    = Db::get();
         $offset = ($page - 1) * $pageSize;
-        $stmt   = $pdo->prepare(<<<'SQL'
+
+        $canSeePrivate = in_array($viewerRole, ['moderator', 'admin'], true);
+
+        // Visibility filter: public OR (private AND viewer is owner)
+        if ($canSeePrivate) {
+            $visFilter  = '1=1';
+            $bindParams = [];
+        } elseif ($viewerUserId !== null) {
+            $visFilter  = "(p.visibility = 'public' OR p.creator_id = :uid)";
+            $bindParams = [':uid' => $viewerUserId];
+        } else {
+            $visFilter  = "p.visibility = 'public'";
+            $bindParams = [];
+        }
+
+        $sql = <<<SQL
             SELECT p.*,
                    (SELECT COUNT(*) FROM pool_items pi WHERE pi.pool_id = p.id) AS items_count,
                    (SELECT pi2.media_id FROM pool_items pi2 WHERE pi2.pool_id = p.id ORDER BY pi2.position ASC LIMIT 1) AS first_media_id,
                    (SELECT GROUP_CONCAT(name, ',') FROM (SELECT t.name FROM tags t JOIN pool_tags pt ON pt.tag_id = t.id WHERE pt.pool_id = p.id ORDER BY t.name LIMIT 3) sub) AS top_tags
             FROM pools p
+            WHERE $visFilter
             ORDER BY p.created_at DESC
             LIMIT :lim OFFSET :off
-        SQL);
+        SQL;
+        $stmt = $pdo->prepare($sql);
+        foreach ($bindParams as $k => $v) {
+            $stmt->bindValue($k, $v, \PDO::PARAM_INT);
+        }
         $stmt->bindValue(':lim', $pageSize, \PDO::PARAM_INT);
         $stmt->bindValue(':off', $offset, \PDO::PARAM_INT);
         $stmt->execute();
-        $rows  = $stmt->fetchAll();
-        $total = (int)$pdo->query('SELECT COUNT(*) FROM pools')->fetchColumn();
+        $rows = $stmt->fetchAll();
+
+        $countSql  = "SELECT COUNT(*) FROM pools p WHERE $visFilter";
+        $countStmt = $pdo->prepare($countSql);
+        foreach ($bindParams as $k => $v) {
+            $countStmt->bindValue($k, $v, \PDO::PARAM_INT);
+        }
+        $countStmt->execute();
+        $total = (int)$countStmt->fetchColumn();
+
         return ['total' => $total, 'results' => $rows, 'page' => $page, 'page_size' => $pageSize];
     }
 
@@ -143,15 +178,16 @@ final class PoolService
         return $stmt->fetchAll();
     }
 
-    public static function update(int $id, string $name, ?string $description = null): array
+    public static function update(int $id, string $name, ?string $description = null, string $visibility = 'public'): array
     {
-        $name = trim($name);
+        $name       = trim($name);
+        $visibility = self::normaliseVisibility($visibility);
         if ($name === '') {
             throw new \RuntimeException('Pool name cannot be empty.');
         }
-        $pdo  = Db::get();
-        $stmt = $pdo->prepare('UPDATE pools SET name = ?, description = ? WHERE id = ?');
-        $stmt->execute([$name, $description ?: null, $id]);
+        $pdo = Db::get();
+        $pdo->prepare('UPDATE pools SET name = ?, description = ?, visibility = ? WHERE id = ?')
+            ->execute([$name, $description ?: null, $visibility, $id]);
         return self::getById($id);
     }
 
@@ -205,6 +241,34 @@ final class PoolService
         SQL);
         $stmt->execute([$mediaId]);
         return $stmt->fetchAll();
+    }
+
+    public static function canView(array $pool, ?int $viewerUserId, string $viewerRole): bool
+    {
+        if (($pool['visibility'] ?? 'public') === 'public') {
+            return true;
+        }
+        if (in_array($viewerRole, ['moderator', 'admin'], true)) {
+            return true;
+        }
+        return $viewerUserId !== null && (int)$pool['creator_id'] === $viewerUserId;
+    }
+
+    public static function canEdit(array $pool, ?int $viewerUserId, string $viewerRole): bool
+    {
+        if (in_array($viewerRole, ['moderator', 'admin'], true)) {
+            return true;
+        }
+        // Null creator (old pools) → mod/admin only (already handled above)
+        if ($pool['creator_id'] === null) {
+            return false;
+        }
+        return $viewerUserId !== null && (int)$pool['creator_id'] === $viewerUserId;
+    }
+
+    private static function normaliseVisibility(string $v): string
+    {
+        return $v === 'private' ? 'private' : 'public';
     }
 
     public static function delete(int $id): bool

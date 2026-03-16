@@ -10,9 +10,12 @@
             <?= $this->e($tag['name']) ?>
             <span class="text-xs text-muted-foreground ml-1">(<?= (int)$tag['count'] ?>)</span>
           </a>
-          <form action="/tags/<?= urlencode($tag['name']) ?>/delete" method="post" class="inline">
-            <button type="submit" class="text-muted-foreground hover:text-destructive leading-none px-1" title="Delete tag globally">×</button>
-          </form>
+          <?php if ($can_moderate ?? false): ?>
+            <form action="/tags/<?= urlencode($tag['name']) ?>/delete" method="post" class="inline">
+              <?= $this->csrfInput() ?>
+              <button type="submit" class="text-muted-foreground hover:text-destructive leading-none px-1" title="Delete tag globally">×</button>
+            </form>
+          <?php endif; ?>
         </span>
       <?php endforeach; ?>
     </div>

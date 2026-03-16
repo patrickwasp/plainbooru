@@ -60,10 +60,13 @@
           <?php foreach ($sortedTags as $tag): ?>
             <span class="badge-outline flex items-center gap-0.5 text-xs">
               <a href="/t/<?= urlencode($tag) ?>" class="hover:underline"><?= $this->e($tag) ?></a>
-              <form action="/m/<?= (int)$media['id'] ?>/tags/remove" method="post" class="inline">
-                <input type="hidden" name="tag" value="<?= $this->e($tag) ?>">
-                <button type="submit" class="text-muted-foreground hover:text-destructive leading-none px-0.5">×</button>
-              </form>
+              <?php if ($can_edit_tags): ?>
+                <form action="/m/<?= (int)$media['id'] ?>/tags/remove" method="post" class="inline">
+                  <?= $this->csrfInput() ?>
+                  <input type="hidden" name="tag" value="<?= $this->e($tag) ?>">
+                  <button type="submit" class="text-muted-foreground hover:text-destructive leading-none px-0.5">×</button>
+                </form>
+              <?php endif; ?>
             </span>
           <?php endforeach; ?>
         </div>
@@ -82,25 +85,24 @@
         </div>
       <?php endif; ?>
 
-      <form action="/m/<?= (int)$media['id'] ?>/tags" method="post" class="flex gap-1 mt-auto">
-        <input type="text" name="tag" placeholder="Add tag…"
-               class="input h-8 text-sm flex-1 min-w-0">
-        <button type="submit" class="btn-sm-icon-outline">
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
-        </button>
-      </form>
+      <?php if ($can_edit_tags): ?>
+        <form action="/m/<?= (int)$media['id'] ?>/tags" method="post" class="flex gap-1 mt-auto">
+          <?= $this->csrfInput() ?>
+          <input type="text" name="tag" placeholder="Add tag…"
+                 class="input h-8 text-sm flex-1 min-w-0">
+          <button type="submit" class="btn-sm-icon-outline">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+          </button>
+        </form>
+      <?php endif; ?>
     </div>
 
     <!-- Details: pinned to bottom, accordion opens upward -->
     <?php
-      $bytes = (int)$media['size_bytes'];
-      $units = ['B', 'KB', 'MB', 'GB', 'TB'];
-      $i = 0;
-      while ($bytes >= 1024 && $i < count($units) - 1) { $bytes /= 1024; $i++; }
       $_rows = [
           ['ID',       '#' . (int)$media['id']],
           ['Type',     $this->e($media['mime'])],
-          ['Size',     number_format($bytes, 2) . ' ' . $units[$i]],
+          ['Size',     $this->formatBytes((int)$media['size_bytes'])],
       ];
       if ($media['width'] && $media['height']) {
           $_rows[] = ['Dimensions', (int)$media['width'] . ' × ' . (int)$media['height']];

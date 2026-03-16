@@ -6,20 +6,22 @@ namespace Plainbooru\Media;
 
 use Plainbooru\Config;
 use Plainbooru\Db;
+use Plainbooru\Settings;
 
 final class MediaService
 {
     /**
      * Store a file that's already been moved to $tmpPath (after PSR-7 moveTo).
      */
-    public static function storeFromPath(string $tmpPath, array $fileInfo, string $tags = ''): array
+    public static function storeFromPath(string $tmpPath, array $fileInfo, string $tags = '', ?int $uploaderId = null): array
     {
         $size = filesize($tmpPath);
         if ($size === false || $size === 0) {
             throw new \RuntimeException('File is empty.');
         }
-        if ($size > Config::maxUploadBytes()) {
-            throw new \RuntimeException('File exceeds maximum upload size of ' . (Config::maxUploadBytes() / 1024 / 1024) . 'MB.');
+        $maxBytes = Settings::getInt('max_upload_mb', 50) * 1024 * 1024;
+        if ($size > $maxBytes) {
+            throw new \RuntimeException('File exceeds maximum upload size of ' . Settings::getInt('max_upload_mb', 50) . 'MB.');
         }
 
         $origName = basename($fileInfo['name'] ?? 'upload');
@@ -27,7 +29,8 @@ final class MediaService
         $finfo = new \finfo(FILEINFO_MIME_TYPE);
         $mime  = $finfo->file($tmpPath);
 
-        if (!Mime::isAllowed($mime)) {
+        $allowedMimes = Settings::getCsv('allowed_mime_types', array_keys(Mime::all()));
+        if (!in_array($mime, $allowedMimes, true) || !Mime::isAllowed($mime)) {
             throw new \RuntimeException("File type '$mime' is not allowed.");
         }
 
@@ -71,11 +74,11 @@ final class MediaService
         $now  = date('c');
         $stmt = $pdo->prepare(<<<'SQL'
             INSERT INTO media (kind, sha256, original_name, stored_name, mime, ext, size_bytes,
-                               width, height, duration_seconds, animated, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                               width, height, duration_seconds, animated, uploader_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         SQL);
         $stmt->execute([$kind, $sha256, $origName, $storedName, $mime, $ext, $size,
-                        $width, $height, $duration, $animated, $now]);
+                        $width, $height, $duration, $animated, $uploaderId, $now]);
         $id = (int)$pdo->lastInsertId();
 
         ThumbService::generate($storedName, $mime, $id);
@@ -89,15 +92,16 @@ final class MediaService
      * Returns the media row array.
      * @throws \RuntimeException on validation failure
      */
-    public static function store(array $uploadedFile, string $tags = ''): array
+    public static function store(array $uploadedFile, string $tags = '', ?int $uploaderId = null): array
     {
         // Validate size
         $size = $uploadedFile['size'] ?? 0;
         if ($size === 0) {
             throw new \RuntimeException('File is empty.');
         }
-        if ($size > Config::maxUploadBytes()) {
-            throw new \RuntimeException('File exceeds maximum upload size of ' . (Config::maxUploadBytes() / 1024 / 1024) . 'MB.');
+        $maxBytes = Settings::getInt('max_upload_mb', 50) * 1024 * 1024;
+        if ($size > $maxBytes) {
+            throw new \RuntimeException('File exceeds maximum upload size of ' . Settings::getInt('max_upload_mb', 50) . 'MB.');
         }
 
         $tmpPath = $uploadedFile['tmp_name'];
@@ -107,7 +111,8 @@ final class MediaService
         $finfo = new \finfo(FILEINFO_MIME_TYPE);
         $mime  = $finfo->file($tmpPath);
 
-        if (!Mime::isAllowed($mime)) {
+        $allowedMimes = Settings::getCsv('allowed_mime_types', array_keys(Mime::all()));
+        if (!in_array($mime, $allowedMimes, true) || !Mime::isAllowed($mime)) {
             throw new \RuntimeException("File type '$mime' is not allowed.");
         }
 
@@ -158,11 +163,11 @@ final class MediaService
         $now = date('c');
         $stmt = $pdo->prepare(<<<'SQL'
             INSERT INTO media (kind, sha256, original_name, stored_name, mime, ext, size_bytes,
-                               width, height, duration_seconds, animated, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                               width, height, duration_seconds, animated, uploader_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         SQL);
         $stmt->execute([$kind, $sha256, $origName, $storedName, $mime, $ext, $size,
-                        $width, $height, $duration, $animated, $now]);
+                        $width, $height, $duration, $animated, $uploaderId, $now]);
         $id = (int)$pdo->lastInsertId();
 
         // Generate thumbnail
@@ -191,6 +196,19 @@ final class MediaService
         $offset = ($page - 1) * $pageSize;
         $rows   = $pdo->query("SELECT * FROM media ORDER BY created_at DESC LIMIT $pageSize OFFSET $offset")->fetchAll();
         $total  = (int)$pdo->query('SELECT COUNT(*) FROM media')->fetchColumn();
+        return ['total' => $total, 'results' => $rows];
+    }
+
+    public static function getByUploader(int $userId, int $page = 1, int $pageSize = 20): array
+    {
+        $pdo    = Db::get();
+        $offset = ($page - 1) * $pageSize;
+        $stmt   = $pdo->prepare('SELECT * FROM media WHERE uploader_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?');
+        $stmt->execute([$userId, $pageSize, $offset]);
+        $rows   = $stmt->fetchAll();
+        $cstmt  = $pdo->prepare('SELECT COUNT(*) FROM media WHERE uploader_id = ?');
+        $cstmt->execute([$userId]);
+        $total  = (int)$cstmt->fetchColumn();
         return ['total' => $total, 'results' => $rows];
     }
 
