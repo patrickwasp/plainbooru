@@ -1029,7 +1029,8 @@ final class App
                 $resp->getBody()->write($html);
                 return $resp->withStatus(404)->withHeader('Content-Type', 'text/html; charset=utf-8');
             }
-            $sidebar = $renderer->partial('sidebar_pool', ['pool' => $pool]);
+            $canEdit = PoolService::canEdit($pool, $viewer ? (int)$viewer['id'] : null, $viewer['role'] ?? 'anonymous');
+            $sidebar = $renderer->partial('sidebar_pool', ['pool' => $pool, 'can_edit' => $canEdit]);
             $html    = $renderer->render('pool', [
                 'title'   => $pool['name'] . ' – plainbooru',
                 'pool'    => $pool,

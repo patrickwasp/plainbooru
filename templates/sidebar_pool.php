@@ -16,6 +16,7 @@
     <p class="text-xs text-muted-foreground">No tags yet.</p>
   <?php endif; ?>
 
+  <?php if (!empty($can_edit)): ?>
   <form action="/pools/<?= (int)$pool['id'] ?>/tags" method="post" class="flex gap-1 mt-auto">
     <input type="hidden" name="return" value="/pools/<?= (int)$pool['id'] ?>">
     <input type="text" name="tag" placeholder="Add tag…"
@@ -24,6 +25,7 @@
       <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
     </button>
   </form>
+  <?php endif; ?>
 </div>
 
 <!-- Details: pinned to bottom, accordion opens upward -->
@@ -34,7 +36,7 @@
       ['Items',   $_count . ' item' . ($_count !== 1 ? 's' : '')],
       ['Created', $this->e(substr($pool['created_at'], 0, 10))],
   ];
-  $_actions = '<a href="/pools/' . $_pid . '/edit" class="btn-outline w-full">Edit Pool</a>';
+  $_actions = !empty($can_edit) ? '<a href="/pools/' . $_pid . '/edit" class="btn-outline w-full">Edit Pool</a>' : '';
 ?>
 <div class="shrink-0 border-t">
   <?= $this->partial('details_accordion', ['title' => 'Details', 'rows' => $_rows, 'actions' => $_actions, 'upward' => true, 'class' => 'px-5']) ?>
