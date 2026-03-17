@@ -180,7 +180,7 @@ final class MediaService
     public static function getById(int $id): ?array
     {
         $pdo  = Db::get();
-        $stmt = $pdo->prepare('SELECT * FROM media WHERE id = ?');
+        $stmt = $pdo->prepare('SELECT * FROM media WHERE id = ? AND deleted_at IS NULL');
         $stmt->execute([$id]);
         $row = $stmt->fetch();
         if (!$row) {
@@ -194,8 +194,8 @@ final class MediaService
     {
         $pdo    = Db::get();
         $offset = ($page - 1) * $pageSize;
-        $rows   = $pdo->query("SELECT * FROM media ORDER BY created_at DESC LIMIT $pageSize OFFSET $offset")->fetchAll();
-        $total  = (int)$pdo->query('SELECT COUNT(*) FROM media')->fetchColumn();
+        $rows   = $pdo->query("SELECT * FROM media WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT $pageSize OFFSET $offset")->fetchAll();
+        $total  = (int)$pdo->query('SELECT COUNT(*) FROM media WHERE deleted_at IS NULL')->fetchColumn();
         return ['total' => $total, 'results' => $rows];
     }
 
@@ -203,10 +203,10 @@ final class MediaService
     {
         $pdo    = Db::get();
         $offset = ($page - 1) * $pageSize;
-        $stmt   = $pdo->prepare('SELECT * FROM media WHERE uploader_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?');
+        $stmt   = $pdo->prepare('SELECT * FROM media WHERE uploader_id = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT ? OFFSET ?');
         $stmt->execute([$userId, $pageSize, $offset]);
         $rows   = $stmt->fetchAll();
-        $cstmt  = $pdo->prepare('SELECT COUNT(*) FROM media WHERE uploader_id = ?');
+        $cstmt  = $pdo->prepare('SELECT COUNT(*) FROM media WHERE uploader_id = ? AND deleted_at IS NULL');
         $cstmt->execute([$userId]);
         $total  = (int)$cstmt->fetchColumn();
         return ['total' => $total, 'results' => $rows];
@@ -223,7 +223,7 @@ final class MediaService
         $union    = $parsed['union'];
 
         $params = [];
-        $where  = ['1=1'];
+        $where  = ['1=1', 'm.deleted_at IS NULL'];
 
         // Required: each token must match (AND). Virtual tags become direct SQL; real tags use subquery.
         foreach ($required as $i => $token) {
@@ -235,7 +235,7 @@ final class MediaService
                 if ($name !== '') {
                     $where[]         = "m.id IN (SELECT mt.media_id FROM media_tags mt
                                                   JOIN tags t ON t.id = mt.tag_id
-                                                  WHERE t.name = :req$i)";
+                                                  WHERE t.name = :req$i AND t.deleted_at IS NULL)";
                     $params[":req$i"] = $name;
                 }
             }
@@ -263,7 +263,7 @@ final class MediaService
                 }
                 $unionSqls[] = "m.id IN (SELECT mt.media_id FROM media_tags mt
                                           JOIN tags t ON t.id = mt.tag_id
-                                          WHERE t.name IN ($in))";
+                                          WHERE t.name IN ($in) AND t.deleted_at IS NULL)";
             }
             if ($unionSqls) {
                 $where[] = '(' . implode(' OR ', $unionSqls) . ')';
@@ -280,7 +280,7 @@ final class MediaService
                 if ($name !== '') {
                     $where[]         = "m.id NOT IN (SELECT mt.media_id FROM media_tags mt
                                                       JOIN tags t ON t.id = mt.tag_id
-                                                      WHERE t.name = :exc$i)";
+                                                      WHERE t.name = :exc$i AND t.deleted_at IS NULL)";
                     $params[":exc$i"] = $name;
                 }
             }
@@ -474,22 +474,45 @@ final class MediaService
         return $pdo->query(<<<'SQL'
             SELECT t.name, COUNT(mt.media_id) AS count
             FROM tags t
-            LEFT JOIN media_tags mt ON mt.tag_id = t.id
+            LEFT JOIN (
+                SELECT mt2.tag_id, mt2.media_id
+                FROM media_tags mt2
+                JOIN media m ON m.id = mt2.media_id AND m.deleted_at IS NULL
+            ) mt ON mt.tag_id = t.id
+            WHERE t.deleted_at IS NULL
             GROUP BY t.id
             ORDER BY count DESC, t.name ASC
         SQL)->fetchAll();
     }
 
-    public static function delete(int $id): bool
+    public static function delete(int $id, ?int $deletedBy = null): bool
     {
-        $row = self::getById($id);
+        $pdo  = Db::get();
+        $now  = gmdate('Y-m-d\TH:i:s\Z');
+        $stmt = $pdo->prepare('UPDATE media SET deleted_at = ?, deleted_by = ? WHERE id = ? AND deleted_at IS NULL');
+        $stmt->execute([$now, $deletedBy, $id]);
+        return $stmt->rowCount() > 0;
+    }
+
+    public static function restore(int $id): bool
+    {
+        $pdo  = Db::get();
+        $stmt = $pdo->prepare('UPDATE media SET deleted_at = NULL, deleted_by = NULL WHERE id = ? AND deleted_at IS NOT NULL');
+        $stmt->execute([$id]);
+        return $stmt->rowCount() > 0;
+    }
+
+    public static function permanentDelete(int $id): bool
+    {
+        $pdo  = Db::get();
+        $stmt = $pdo->prepare('SELECT * FROM media WHERE id = ?');
+        $stmt->execute([$id]);
+        $row  = $stmt->fetch();
         if (!$row) {
             return false;
         }
-        $pdo = Db::get();
         $pdo->prepare('DELETE FROM media WHERE id = ?')->execute([$id]);
 
-        // Remove files
         $upload = Config::uploadsPath() . '/' . $row['stored_name'];
         $thumb  = Config::thumbsPath() . '/' . $id . '.webp';
         foreach ([$upload, $thumb] as $f) {
@@ -498,6 +521,24 @@ final class MediaService
             }
         }
         return true;
+    }
+
+    public static function getDeleted(int $page = 1, int $pageSize = 20): array
+    {
+        $pdo    = Db::get();
+        $offset = ($page - 1) * $pageSize;
+        $stmt   = $pdo->prepare(<<<'SQL'
+            SELECT m.*, u.username AS deleted_by_username
+            FROM media m
+            LEFT JOIN users u ON u.id = m.deleted_by
+            WHERE m.deleted_at IS NOT NULL
+            ORDER BY m.deleted_at DESC
+            LIMIT ? OFFSET ?
+        SQL);
+        $stmt->execute([$pageSize, $offset]);
+        $rows  = $stmt->fetchAll();
+        $total = (int)$pdo->query('SELECT COUNT(*) FROM media WHERE deleted_at IS NOT NULL')->fetchColumn();
+        return ['total' => $total, 'results' => $rows];
     }
 
     public static function removeTag(int $mediaId, string $tagName): void
@@ -510,12 +551,50 @@ final class MediaService
         SQL)->execute([$mediaId, $tagName]);
     }
 
-    public static function deleteTag(string $tagName): bool
+    public static function deleteTag(string $tagName, ?int $deletedBy = null): bool
+    {
+        $pdo  = Db::get();
+        $now  = gmdate('Y-m-d\TH:i:s\Z');
+        $stmt = $pdo->prepare('UPDATE tags SET deleted_at = ?, deleted_by = ? WHERE name = ? AND deleted_at IS NULL');
+        $stmt->execute([$now, $deletedBy, $tagName]);
+        return $stmt->rowCount() > 0;
+    }
+
+    public static function restoreTag(string $tagName): bool
+    {
+        $pdo  = Db::get();
+        $stmt = $pdo->prepare('UPDATE tags SET deleted_at = NULL, deleted_by = NULL WHERE name = ? AND deleted_at IS NOT NULL');
+        $stmt->execute([$tagName]);
+        return $stmt->rowCount() > 0;
+    }
+
+    public static function permanentDeleteTag(string $tagName): bool
     {
         $pdo  = Db::get();
         $stmt = $pdo->prepare('DELETE FROM tags WHERE name = ?');
         $stmt->execute([$tagName]);
         return $stmt->rowCount() > 0;
+    }
+
+    public static function getDeletedTags(int $page = 1, int $pageSize = 50): array
+    {
+        $pdo    = Db::get();
+        $offset = ($page - 1) * $pageSize;
+        $stmt   = $pdo->prepare(<<<'SQL'
+            SELECT t.*, u.username AS deleted_by_username,
+                   COUNT(mt.media_id) AS media_count
+            FROM tags t
+            LEFT JOIN users u ON u.id = t.deleted_by
+            LEFT JOIN media_tags mt ON mt.tag_id = t.id
+            WHERE t.deleted_at IS NOT NULL
+            GROUP BY t.id
+            ORDER BY t.deleted_at DESC
+            LIMIT ? OFFSET ?
+        SQL);
+        $stmt->execute([$pageSize, $offset]);
+        $rows  = $stmt->fetchAll();
+        $total = (int)$pdo->query('SELECT COUNT(*) FROM tags WHERE deleted_at IS NOT NULL')->fetchColumn();
+        return ['total' => $total, 'results' => $rows];
     }
 
     public static function getPopularTags(int $limit = 20): array
@@ -525,6 +604,8 @@ final class MediaService
             SELECT t.name, COUNT(mt.media_id) AS count
             FROM tags t
             JOIN media_tags mt ON mt.tag_id = t.id
+            JOIN media m ON m.id = mt.media_id AND m.deleted_at IS NULL
+            WHERE t.deleted_at IS NULL
             GROUP BY t.id
             ORDER BY count DESC
             LIMIT ?
@@ -544,7 +625,7 @@ final class MediaService
             SELECT t.name, COUNT(mt.media_id) AS count
             FROM tags t
             JOIN media_tags mt ON mt.tag_id = t.id
-            WHERE mt.media_id IN ($placeholders)
+            WHERE mt.media_id IN ($placeholders) AND t.deleted_at IS NULL
             GROUP BY t.id
             ORDER BY count DESC
             LIMIT $limit
@@ -562,6 +643,9 @@ final class MediaService
             $pdo = Db::get();
             foreach ($tagList as $tag) {
                 $pdo->prepare('INSERT OR IGNORE INTO tags (name) VALUES (?)')->execute([$tag]);
+                // Restore tag if it was soft-deleted
+                $pdo->prepare('UPDATE tags SET deleted_at = NULL, deleted_by = NULL WHERE name = ? AND deleted_at IS NOT NULL')
+                    ->execute([$tag]);
                 $tagId = (int)$pdo->query("SELECT id FROM tags WHERE name = " . $pdo->quote($tag))->fetchColumn();
                 $pdo->prepare('INSERT OR IGNORE INTO media_tags (media_id, tag_id) VALUES (?, ?)')
                     ->execute([$row['id'], $tagId]);
@@ -577,7 +661,7 @@ final class MediaService
         $stmt = $pdo->prepare(<<<'SQL'
             SELECT t.name FROM tags t
             JOIN media_tags mt ON mt.tag_id = t.id
-            WHERE mt.media_id = ?
+            WHERE mt.media_id = ? AND t.deleted_at IS NULL
             ORDER BY t.name
         SQL);
         $stmt->execute([$mediaId]);

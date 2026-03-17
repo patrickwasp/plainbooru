@@ -85,4 +85,39 @@ final class CommentService
         $row = $stmt->fetch();
         return $row ?: null;
     }
+
+    public static function restore(int $id): bool
+    {
+        $stmt = Db::get()->prepare(
+            'UPDATE comments SET deleted_at = NULL, deleted_by = NULL WHERE id = ? AND deleted_at IS NOT NULL'
+        );
+        $stmt->execute([$id]);
+        return $stmt->rowCount() > 0;
+    }
+
+    public static function permanentDelete(int $id): bool
+    {
+        $stmt = Db::get()->prepare('DELETE FROM comments WHERE id = ?');
+        $stmt->execute([$id]);
+        return $stmt->rowCount() > 0;
+    }
+
+    public static function getDeleted(int $page = 1, int $pageSize = 20): array
+    {
+        $pdo    = Db::get();
+        $offset = ($page - 1) * $pageSize;
+        $stmt   = $pdo->prepare(<<<'SQL'
+            SELECT c.*, u.username, del.username AS deleted_by_username
+            FROM comments c
+            LEFT JOIN users u ON u.id = c.user_id
+            LEFT JOIN users del ON del.id = c.deleted_by
+            WHERE c.deleted_at IS NOT NULL
+            ORDER BY c.deleted_at DESC
+            LIMIT ? OFFSET ?
+        SQL);
+        $stmt->execute([$pageSize, $offset]);
+        $rows  = $stmt->fetchAll();
+        $total = (int)$pdo->query('SELECT COUNT(*) FROM comments WHERE deleted_at IS NOT NULL')->fetchColumn();
+        return ['total' => $total, 'results' => $rows];
+    }
 }

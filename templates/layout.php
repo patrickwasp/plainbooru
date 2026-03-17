@@ -28,6 +28,7 @@
               <li><a href="/settings/tokens">API Tokens</a></li>
               <?php if (in_array($role, ['moderator', 'admin'], true)): ?>
                 <li><a href="/admin/mod-log">Mod log</a></li>
+                <li><a href="/admin/trash">Trash</a></li>
               <?php endif; ?>
               <?php if ($role === 'admin'): ?>
                 <li><a href="/admin/users">Users</a></li>
@@ -81,6 +82,7 @@
           <li><a href="/settings/tokens">API Tokens</a></li>
           <?php if (in_array($role, ['moderator', 'admin'], true)): ?>
             <li><a href="/admin/mod-log">Mod log</a></li>
+            <li><a href="/admin/trash">Trash</a></li>
           <?php endif; ?>
           <?php if ($role === 'admin'): ?>
             <li><a href="/admin/users">Users</a></li>

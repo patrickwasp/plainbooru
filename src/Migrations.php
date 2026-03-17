@@ -165,6 +165,27 @@ final class Migrations
         if (!in_array('visibility', $poolCols, true)) {
             $pdo->exec("ALTER TABLE pools ADD COLUMN visibility TEXT NOT NULL DEFAULT 'public'");
         }
+        if (!in_array('deleted_at', $poolCols, true)) {
+            $pdo->exec('ALTER TABLE pools ADD COLUMN deleted_at TEXT NULL');
+        }
+        if (!in_array('deleted_by', $poolCols, true)) {
+            $pdo->exec('ALTER TABLE pools ADD COLUMN deleted_by INTEGER NULL REFERENCES users(id)');
+        }
+
+        if (!in_array('deleted_at', $cols, true)) {
+            $pdo->exec('ALTER TABLE media ADD COLUMN deleted_at TEXT NULL');
+        }
+        if (!in_array('deleted_by', $cols, true)) {
+            $pdo->exec('ALTER TABLE media ADD COLUMN deleted_by INTEGER NULL REFERENCES users(id)');
+        }
+
+        $tagCols = array_column($pdo->query('PRAGMA table_info(tags)')->fetchAll(), 'name');
+        if (!in_array('deleted_at', $tagCols, true)) {
+            $pdo->exec('ALTER TABLE tags ADD COLUMN deleted_at TEXT NULL');
+        }
+        if (!in_array('deleted_by', $tagCols, true)) {
+            $pdo->exec('ALTER TABLE tags ADD COLUMN deleted_by INTEGER NULL REFERENCES users(id)');
+        }
 
         $pdo->exec('CREATE INDEX IF NOT EXISTS idx_pools_creator_id ON pools(creator_id)');
         $pdo->exec('CREATE INDEX IF NOT EXISTS idx_pools_visibility  ON pools(visibility)');

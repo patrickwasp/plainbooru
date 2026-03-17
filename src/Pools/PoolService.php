@@ -30,7 +30,7 @@ final class PoolService
     public static function getById(int $id, ?int $viewerUserId = null, string $viewerRole = 'anonymous'): ?array
     {
         $pdo  = Db::get();
-        $stmt = $pdo->prepare('SELECT * FROM pools WHERE id = ?');
+        $stmt = $pdo->prepare('SELECT * FROM pools WHERE id = ? AND deleted_at IS NULL');
         $stmt->execute([$id]);
         $pool = $stmt->fetch();
         if (!$pool) {
@@ -53,13 +53,13 @@ final class PoolService
 
         // Visibility filter: public OR (private AND viewer is owner)
         if ($canSeePrivate) {
-            $visFilter  = '1=1';
+            $visFilter  = 'p.deleted_at IS NULL';
             $bindParams = [];
         } elseif ($viewerUserId !== null) {
-            $visFilter  = "(p.visibility = 'public' OR p.creator_id = :uid)";
+            $visFilter  = "p.deleted_at IS NULL AND (p.visibility = 'public' OR p.creator_id = :uid)";
             $bindParams = [':uid' => $viewerUserId];
         } else {
-            $visFilter  = "p.visibility = 'public'";
+            $visFilter  = "p.deleted_at IS NULL AND p.visibility = 'public'";
             $bindParams = [];
         }
 
@@ -102,7 +102,7 @@ final class PoolService
         if (!$pool->fetch()) {
             throw new \RuntimeException('Pool not found.');
         }
-        $media = $pdo->prepare('SELECT id FROM media WHERE id = ?');
+        $media = $pdo->prepare('SELECT id FROM media WHERE id = ? AND deleted_at IS NULL');
         $media->execute([$mediaId]);
         if (!$media->fetch()) {
             throw new \RuntimeException('Media not found.');
@@ -168,9 +168,9 @@ final class PoolService
             SELECT pi.position, pi.added_at,
                    m.id, m.kind, m.sha256, m.original_name, m.stored_name,
                    m.mime, m.ext, m.size_bytes, m.width, m.height,
-                   m.duration_seconds, m.created_at, m.source
+                   m.duration_seconds, m.created_at
             FROM pool_items pi
-            JOIN media m ON m.id = pi.media_id
+            JOIN media m ON m.id = pi.media_id AND m.deleted_at IS NULL
             WHERE pi.pool_id = ?
             ORDER BY pi.position ASC
         SQL);
@@ -197,7 +197,7 @@ final class PoolService
         $stmt = $pdo->prepare(<<<'SQL'
             SELECT t.name FROM tags t
             JOIN pool_tags pt ON pt.tag_id = t.id
-            WHERE pt.pool_id = ?
+            WHERE pt.pool_id = ? AND t.deleted_at IS NULL
             ORDER BY t.name
         SQL);
         $stmt->execute([$poolId]);
@@ -213,6 +213,9 @@ final class PoolService
         $tagName = $parsed[0];
         $pdo = Db::get();
         $pdo->prepare('INSERT OR IGNORE INTO tags (name) VALUES (?)')->execute([$tagName]);
+        // Restore tag if it was soft-deleted
+        $pdo->prepare('UPDATE tags SET deleted_at = NULL, deleted_by = NULL WHERE name = ? AND deleted_at IS NOT NULL')
+            ->execute([$tagName]);
         $stmt = $pdo->prepare('SELECT id FROM tags WHERE name = ?');
         $stmt->execute([$tagName]);
         $tagId = (int)$stmt->fetchColumn();
@@ -236,7 +239,7 @@ final class PoolService
             SELECT p.id, p.name
             FROM pools p
             JOIN pool_items pi ON pi.pool_id = p.id
-            WHERE pi.media_id = ?
+            WHERE pi.media_id = ? AND p.deleted_at IS NULL
             ORDER BY p.name ASC
         SQL);
         $stmt->execute([$mediaId]);
@@ -271,11 +274,46 @@ final class PoolService
         return $v === 'private' ? 'private' : 'public';
     }
 
-    public static function delete(int $id): bool
+    public static function delete(int $id, ?int $deletedBy = null): bool
+    {
+        $pdo  = Db::get();
+        $now  = gmdate('Y-m-d\TH:i:s\Z');
+        $stmt = $pdo->prepare('UPDATE pools SET deleted_at = ?, deleted_by = ? WHERE id = ? AND deleted_at IS NULL');
+        $stmt->execute([$now, $deletedBy, $id]);
+        return $stmt->rowCount() > 0;
+    }
+
+    public static function restore(int $id): bool
+    {
+        $pdo  = Db::get();
+        $stmt = $pdo->prepare('UPDATE pools SET deleted_at = NULL, deleted_by = NULL WHERE id = ? AND deleted_at IS NOT NULL');
+        $stmt->execute([$id]);
+        return $stmt->rowCount() > 0;
+    }
+
+    public static function permanentDelete(int $id): bool
     {
         $pdo  = Db::get();
         $stmt = $pdo->prepare('DELETE FROM pools WHERE id = ?');
         $stmt->execute([$id]);
         return $stmt->rowCount() > 0;
+    }
+
+    public static function getDeleted(int $page = 1, int $pageSize = 20): array
+    {
+        $pdo    = Db::get();
+        $offset = ($page - 1) * $pageSize;
+        $stmt   = $pdo->prepare(<<<'SQL'
+            SELECT p.*, u.username AS deleted_by_username
+            FROM pools p
+            LEFT JOIN users u ON u.id = p.deleted_by
+            WHERE p.deleted_at IS NOT NULL
+            ORDER BY p.deleted_at DESC
+            LIMIT ? OFFSET ?
+        SQL);
+        $stmt->execute([$pageSize, $offset]);
+        $rows  = $stmt->fetchAll();
+        $total = (int)$pdo->query('SELECT COUNT(*) FROM pools WHERE deleted_at IS NOT NULL')->fetchColumn();
+        return ['total' => $total, 'results' => $rows];
     }
 }

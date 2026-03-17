@@ -657,7 +657,7 @@ final class App
             if (!$isOwner && !Policy::canModerate($user)) {
                 return $resp->withStatus(403);
             }
-            MediaService::delete($mediaId);
+            MediaService::delete($mediaId, $user ? (int)$user['id'] : null);
             if ($user) {
                 ModLog::write('media.delete', 'media:' . $mediaId, (int)$user['id']);
             }
@@ -765,7 +765,8 @@ final class App
         $app->post('/tags/{name}/delete', function (Request $req, Response $resp, array $args) {
             $user = UserService::current();
             Guard::requireAtLeast('moderator', $user);
-            MediaService::deleteTag(urldecode($args['name']));
+            MediaService::deleteTag(urldecode($args['name']), (int)$user['id']);
+            ModLog::write('tag.delete', 'tag:' . urldecode($args['name']), (int)$user['id']);
             return $resp->withStatus(302)->withHeader('Location', '/tags');
         });
 
@@ -985,7 +986,7 @@ final class App
             if (!$pool || !PoolService::canEdit($pool, $viewer ? (int)$viewer['id'] : null, $viewer['role'] ?? 'anonymous')) {
                 return $resp->withStatus(403);
             }
-            PoolService::delete((int)$args['id']);
+            PoolService::delete((int)$args['id'], $viewer ? (int)$viewer['id'] : null);
             return $resp->withStatus(302)->withHeader('Location', '/pools');
         });
 
@@ -1408,6 +1409,126 @@ final class App
             ]);
             $resp->getBody()->write($html);
             return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
+        });
+
+        // ── Admin: trash (soft-deleted items) ────────────────────────────────
+
+        // GET /admin/trash
+        $app->get('/admin/trash', function (Request $req, Response $resp) use ($renderer) {
+            $user = UserService::current();
+            Guard::requireAtLeast('moderator', $user);
+            $params       = $req->getQueryParams();
+            $mediaPage    = max(1, (int)($params['mp'] ?? 1));
+            $poolPage     = max(1, (int)($params['pp'] ?? 1));
+            $tagPage      = max(1, (int)($params['tp'] ?? 1));
+            $commentPage  = max(1, (int)($params['cp'] ?? 1));
+            $pageSize     = 20;
+            $mediaData    = MediaService::getDeleted($mediaPage, $pageSize);
+            $poolData     = PoolService::getDeleted($poolPage, $pageSize);
+            $tagData      = MediaService::getDeletedTags($tagPage, 50);
+            $commentData  = CommentService::getDeleted($commentPage, $pageSize);
+            $html = $renderer->render('admin/trash', [
+                'title'              => 'Trash – Admin – plainbooru',
+                'deletedMedia'       => $mediaData['results'],
+                'mediaTotal'         => $mediaData['total'],
+                'mediaPage'          => $mediaPage,
+                'mediaTotalPages'    => max(1, (int)ceil($mediaData['total'] / $pageSize)),
+                'deletedPools'       => $poolData['results'],
+                'poolsTotal'         => $poolData['total'],
+                'poolsPage'          => $poolPage,
+                'poolsTotalPages'    => max(1, (int)ceil($poolData['total'] / $pageSize)),
+                'deletedTags'        => $tagData['results'],
+                'tagsTotal'          => $tagData['total'],
+                'tagPage'            => $tagPage,
+                'tagsTotalPages'     => max(1, (int)ceil($tagData['total'] / 50)),
+                'deletedComments'    => $commentData['results'],
+                'commentsTotal'      => $commentData['total'],
+                'commentPage'        => $commentPage,
+                'commentsTotalPages' => max(1, (int)ceil($commentData['total'] / $pageSize)),
+                'pageSize'           => $pageSize,
+            ]);
+            $resp->getBody()->write($html);
+            return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
+        });
+
+        // POST /admin/trash/media/{id}/restore
+        $app->post('/admin/trash/media/{id:[0-9]+}/restore', function (Request $req, Response $resp, array $args) {
+            $user = UserService::current();
+            Guard::requireAtLeast('moderator', $user);
+            $id = (int)$args['id'];
+            MediaService::restore($id);
+            ModLog::write('media.restore', 'media:' . $id, (int)$user['id']);
+            return $resp->withStatus(302)->withHeader('Location', '/admin/trash');
+        });
+
+        // POST /admin/trash/media/{id}/purge
+        $app->post('/admin/trash/media/{id:[0-9]+}/purge', function (Request $req, Response $resp, array $args) {
+            $user = UserService::current();
+            Guard::requireAtLeast('moderator', $user);
+            $id = (int)$args['id'];
+            MediaService::permanentDelete($id);
+            ModLog::write('media.purge', 'media:' . $id, (int)$user['id']);
+            return $resp->withStatus(302)->withHeader('Location', '/admin/trash');
+        });
+
+        // POST /admin/trash/pools/{id}/restore
+        $app->post('/admin/trash/pools/{id:[0-9]+}/restore', function (Request $req, Response $resp, array $args) {
+            $user = UserService::current();
+            Guard::requireAtLeast('moderator', $user);
+            $id = (int)$args['id'];
+            PoolService::restore($id);
+            ModLog::write('pool.restore', 'pool:' . $id, (int)$user['id']);
+            return $resp->withStatus(302)->withHeader('Location', '/admin/trash');
+        });
+
+        // POST /admin/trash/pools/{id}/purge
+        $app->post('/admin/trash/pools/{id:[0-9]+}/purge', function (Request $req, Response $resp, array $args) {
+            $user = UserService::current();
+            Guard::requireAtLeast('moderator', $user);
+            $id = (int)$args['id'];
+            PoolService::permanentDelete($id);
+            ModLog::write('pool.purge', 'pool:' . $id, (int)$user['id']);
+            return $resp->withStatus(302)->withHeader('Location', '/admin/trash');
+        });
+
+        // POST /admin/trash/tags/{name}/restore
+        $app->post('/admin/trash/tags/{name}/restore', function (Request $req, Response $resp, array $args) {
+            $user = UserService::current();
+            Guard::requireAtLeast('moderator', $user);
+            $name = urldecode($args['name']);
+            MediaService::restoreTag($name);
+            ModLog::write('tag.restore', 'tag:' . $name, (int)$user['id']);
+            return $resp->withStatus(302)->withHeader('Location', '/admin/trash');
+        });
+
+        // POST /admin/trash/tags/{name}/purge
+        $app->post('/admin/trash/tags/{name}/purge', function (Request $req, Response $resp, array $args) {
+            $user = UserService::current();
+            Guard::requireAtLeast('moderator', $user);
+            $name = urldecode($args['name']);
+            MediaService::permanentDeleteTag($name);
+            ModLog::write('tag.purge', 'tag:' . $name, (int)$user['id']);
+            return $resp->withStatus(302)->withHeader('Location', '/admin/trash');
+        });
+
+        // POST /admin/trash/comments/{id}/restore
+        $app->post('/admin/trash/comments/{id:[0-9]+}/restore', function (Request $req, Response $resp, array $args) {
+            $user = UserService::current();
+            Guard::requireAtLeast('moderator', $user);
+            $id = (int)$args['id'];
+            CommentService::restore($id);
+            ModLog::write('comment.restore', 'comment:' . $id, (int)$user['id']);
+            return $resp->withStatus(302)->withHeader('Location', '/admin/trash');
+        });
+
+        // POST /admin/trash/comments/{id}/purge
+        $app->post('/admin/trash/comments/{id:[0-9]+}/purge', function (Request $req, Response $resp, array $args) {
+            $user = UserService::current();
+            Guard::requireAtLeast('moderator', $user);
+            $id = (int)$args['id'];
+            CommentService::permanentDelete($id);
+            ModLog::write('comment.purge', 'comment:' . $id, (int)$user['id']);
+            return $resp->withStatus(302)->withHeader('Location', '/admin/trash');
         });
 
         return $app;
