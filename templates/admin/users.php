@@ -1,5 +1,6 @@
 <?php
 /** @var array $users */
+/** @var array $currentUser */
 $roles = ['user', 'trusted', 'moderator', 'admin'];
 ?>
 <div class="max-w-5xl mx-auto flex flex-col gap-6">
@@ -23,10 +24,18 @@ $roles = ['user', 'trusted', 'moderator', 'admin'];
       </thead>
       <tbody class="divide-y divide-border">
         <?php foreach ($users as $u): ?>
-          <?php $isBanned = !empty($u['banned_at']); ?>
+          <?php
+            $isBanned = !empty($u['banned_at']);
+            $isSelf   = (int)$u['id'] === (int)$currentUser['id'];
+          ?>
           <tr class="<?= $isBanned ? 'opacity-50' : '' ?>">
             <td class="px-4 py-3 text-muted-foreground"><?= (int)$u['id'] ?></td>
-            <td class="px-4 py-3 font-medium"><?= $this->e($u['username']) ?></td>
+            <td class="px-4 py-3 font-medium">
+              <?= $this->e($u['username']) ?>
+              <?php if ($isSelf): ?>
+                <span class="text-xs text-muted-foreground">(you)</span>
+              <?php endif; ?>
+            </td>
             <td class="px-4 py-3">
               <span class="badge-outline text-xs"><?= $this->e($u['role']) ?></span>
             </td>
@@ -41,7 +50,7 @@ $roles = ['user', 'trusted', 'moderator', 'admin'];
             <td class="px-4 py-3">
               <div class="flex items-center gap-2 flex-wrap">
 
-                <?php if (!$isBanned): ?>
+                <?php if (!$isBanned && !$isSelf): ?>
                   <!-- Change role -->
                   <form action="/admin/users/<?= (int)$u['id'] ?>/role" method="post" class="flex items-center gap-1">
                     <?= $this->csrfInput() ?>

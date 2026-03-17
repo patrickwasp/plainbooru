@@ -7,9 +7,9 @@ $showTokens = isset($tokens);
 <div class="max-w-2xl flex flex-col gap-8">
 
   <div class="flex items-center gap-4">
-    <h1 class="text-2xl font-bold">Account Settings</h1>
+    <h1 class="text-2xl font-bold">Settings</h1>
     <nav class="flex gap-2 text-sm">
-      <a href="/settings/account" class="<?= !$showTokens ? 'font-semibold underline' : 'text-muted-foreground hover:text-foreground' ?>">Profile &amp; Password</a>
+      <a href="/settings/account" class="<?= !$showTokens ? 'font-semibold underline' : 'text-muted-foreground hover:text-foreground' ?>">Account</a>
       <a href="/settings/tokens" class="<?= $showTokens ? 'font-semibold underline' : 'text-muted-foreground hover:text-foreground' ?>">API Tokens</a>
     </nav>
   </div>

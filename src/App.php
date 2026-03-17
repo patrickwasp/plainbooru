@@ -1350,8 +1350,9 @@ final class App
             $pdo   = Db::get();
             $users = $pdo->query('SELECT id, username, role, created_at, banned_at FROM users ORDER BY id ASC')->fetchAll();
             $html  = $renderer->render('admin/users', [
-                'title' => 'Users – Admin – plainbooru',
-                'users' => $users,
+                'title'       => 'Users – Admin – plainbooru',
+                'users'       => $users,
+                'currentUser' => $user,
             ]);
             $resp->getBody()->write($html);
             return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
