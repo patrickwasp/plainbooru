@@ -24,20 +24,18 @@
           <details class="dropdown">
             <summary class="btn-ghost text-sm px-3 py-1 rounded-md hover:bg-accent cursor-pointer list-none"><?= $this->e($currentUser['username']) ?></summary>
             <ul>
-              <li><a href="/settings/account">Account</a></li>
-              <li><a href="/settings/tokens">API Tokens</a></li>
+              <li><a href="/settings/account">My account</a></li>
               <?php if (in_array($role, ['moderator', 'admin'], true)): ?>
-                <li><a href="/admin/mod-log">Mod log</a></li>
-                <li><a href="/admin/trash">Trash</a></li>
+                <li><a href="/admin/mod-log">Moderation</a></li>
               <?php endif; ?>
               <?php if ($role === 'admin'): ?>
-                <li><a href="/admin/users">Users</a></li>
-                <li><a href="/admin/settings">Site settings</a></li>
+                <li><a href="/admin/users">Administration</a></li>
               <?php endif; ?>
+              <li><hr class="border-border my-1"></li>
               <li>
                 <form action="/logout" method="post">
                   <?= $this->csrfInput() ?>
-                  <button type="submit">Log out</button>
+                  <button type="submit" class="text-destructive w-full text-left">Log out</button>
                 </form>
               </li>
             </ul>
@@ -78,20 +76,18 @@
       <details class="dropdown">
         <summary class="text-xs px-2 py-1 rounded hover:bg-accent cursor-pointer list-none"><?= $this->e($currentUser['username']) ?></summary>
         <ul dir="rtl">
-          <li><a href="/settings/account">Account</a></li>
-          <li><a href="/settings/tokens">API Tokens</a></li>
+          <li><a href="/settings/account">My account</a></li>
           <?php if (in_array($role, ['moderator', 'admin'], true)): ?>
-            <li><a href="/admin/mod-log">Mod log</a></li>
-            <li><a href="/admin/trash">Trash</a></li>
+            <li><a href="/admin/mod-log">Moderation</a></li>
           <?php endif; ?>
           <?php if ($role === 'admin'): ?>
-            <li><a href="/admin/users">Users</a></li>
-            <li><a href="/admin/settings">Site settings</a></li>
+            <li><a href="/admin/users">Administration</a></li>
           <?php endif; ?>
+          <li><hr class="border-border my-1"></li>
           <li>
             <form action="/logout" method="post">
               <?= $this->csrfInput() ?>
-              <button type="submit">Log out</button>
+              <button type="submit" class="text-destructive w-full text-right">Log out</button>
             </form>
           </li>
         </ul>

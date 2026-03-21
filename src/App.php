@@ -9,6 +9,7 @@ use Plainbooru\Auth\ModLog;
 use Plainbooru\Auth\Policy;
 use Plainbooru\Auth\TokenService;
 use Plainbooru\Auth\UserService;
+use Plainbooru\Install\InstallService;
 use Plainbooru\RateLimiter;
 use Plainbooru\Db;
 use Plainbooru\Http\Csrf;
@@ -119,6 +120,75 @@ final class App
                 }
             }
             return $handler->handle($req);
+        });
+
+        // Install guard — redirect to /install if not yet installed, or away from
+        // /install if already done. Added last so it runs outermost (first on request).
+        $app->add(function (Request $req, $handler) {
+            $path      = $req->getUri()->getPath();
+            $installed = InstallService::isInstalled();
+
+            if (!$installed && $path !== '/install') {
+                $resp = new \Slim\Psr7\Response(302);
+                return $resp->withHeader('Location', '/install');
+            }
+
+            if ($installed && $path === '/install') {
+                $resp = new \Slim\Psr7\Response(302);
+                return $resp->withHeader('Location', '/');
+            }
+
+            return $handler->handle($req);
+        });
+
+        // ── Install Routes ───────────────────────────────────────────────────
+
+        // GET /install
+        $app->get('/install', function (Request $req, Response $resp) use ($renderer) {
+            $html = $renderer->render('install', [
+                'title'     => 'Install plainbooru',
+                'mainClass' => 'flex-1 flex items-center justify-center px-4 py-12',
+                'errors'    => [],
+                'values'    => [],
+            ]);
+            $resp->getBody()->write($html);
+            return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
+        });
+
+        // POST /install
+        $app->post('/install', function (Request $req, Response $resp) use ($renderer) {
+            $params = (array)($req->getParsedBody() ?? []);
+            $input  = [
+                'admin_user'  => trim($params['admin_user'] ?? ''),
+                'admin_pass'  => $params['admin_pass'] ?? '',
+                'site_title'  => trim($params['site_title'] ?? ''),
+            ];
+
+            $errors = InstallService::validate($input);
+            if (!empty($errors)) {
+                $html = $renderer->render('install', [
+                    'title'     => 'Install plainbooru',
+                    'mainClass' => 'flex-1 flex items-center justify-center px-4 py-12',
+                    'errors'    => $errors,
+                    'values'    => $input,
+                ]);
+                $resp->getBody()->write($html);
+                return $resp->withStatus(422)->withHeader('Content-Type', 'text/html; charset=utf-8');
+            }
+
+            try {
+                InstallService::run($input);
+                return $resp->withStatus(302)->withHeader('Location', '/login');
+            } catch (\RuntimeException $e) {
+                $html = $renderer->render('install', [
+                    'title'     => 'Install plainbooru',
+                    'mainClass' => 'flex-1 flex items-center justify-center px-4 py-12',
+                    'errors'    => [$e->getMessage()],
+                    'values'    => $input,
+                ]);
+                $resp->getBody()->write($html);
+                return $resp->withStatus(500)->withHeader('Content-Type', 'text/html; charset=utf-8');
+            }
         });
 
         // ── HTML Routes ──────────────────────────────────────────────────────

@@ -1,0 +1,142 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+/**
+ * plainbooru CLI installer
+ *
+ * Usage:
+ *   php bin/install --admin-user=admin --admin-pass=secret123
+ *
+ * Options:
+ *   --admin-user=<username>   Admin account username (required)
+ *   --admin-pass=<password>   Admin account password, min 8 chars (required)
+ *   --admin-email=<email>     Admin email address (optional, stored in settings)
+ *   --site-title=<title>      Site title (optional, default: plainbooru)
+ *   --config=<path>           Path to a JSON config file supplying the above
+ *   --force                   Skip the already-installed check (dangerous)
+ *   --help                    Show this help text
+ *
+ * JSON config file format:
+ *   {
+ *     "admin_user":  "admin",
+ *     "admin_pass":  "secret123",
+ *     "admin_email": "admin@example.com",
+ *     "site_title":  "My Booru"
+ *   }
+ */
+
+$root = dirname(__DIR__);
+
+if (!file_exists($root . '/vendor/autoload.php')) {
+    fwrite(STDERR, "Error: vendor/autoload.php not found. Run `composer install` first.\n");
+    exit(1);
+}
+
+require $root . '/vendor/autoload.php';
+
+use Plainbooru\Config;
+use Plainbooru\Install\InstallService;
+
+Config::load();
+
+// ── Argument parsing ──────────────────────────────────────────────────────────
+
+$longopts = ['admin-user:', 'admin-pass:', 'admin-email:', 'site-title:', 'config:', 'force', 'help'];
+$opts     = getopt('h', $longopts);
+
+if (isset($opts['h']) || isset($opts['help'])) {
+    echo file_get_contents(__FILE__) . "\n";
+    // Print the docblock instead
+    $lines = file(__FILE__);
+    $doc   = '';
+    foreach ($lines as $line) {
+        if (str_starts_with(trim($line), '/*') || str_starts_with(trim($line), '*')) {
+            $doc .= ltrim($line, " \t/*");
+        }
+    }
+    fwrite(STDOUT, "plainbooru installer\n\n");
+    fwrite(STDOUT, "Usage:\n");
+    fwrite(STDOUT, "  php bin/install --admin-user=admin --admin-pass=secret123\n\n");
+    fwrite(STDOUT, "Options:\n");
+    fwrite(STDOUT, "  --admin-user=<username>   Admin account username (required)\n");
+    fwrite(STDOUT, "  --admin-pass=<password>   Admin account password, min 8 chars (required)\n");
+    fwrite(STDOUT, "  --admin-email=<email>     Admin email address (optional)\n");
+    fwrite(STDOUT, "  --site-title=<title>      Site title (optional, default: plainbooru)\n");
+    fwrite(STDOUT, "  --config=<path>           Path to a JSON config file\n");
+    fwrite(STDOUT, "  --force                   Skip already-installed check\n");
+    fwrite(STDOUT, "  --help                    Show this help text\n\n");
+    fwrite(STDOUT, "JSON config file format:\n");
+    fwrite(STDOUT, "  {\n    \"admin_user\": \"admin\",\n    \"admin_pass\": \"secret123\",\n    \"site_title\": \"My Booru\"\n  }\n");
+    exit(0);
+}
+
+// Start with CLI flags
+$params = [
+    'admin_user'  => $opts['admin-user']  ?? '',
+    'admin_pass'  => $opts['admin-pass']  ?? '',
+    'admin_email' => $opts['admin-email'] ?? '',
+    'site_title'  => $opts['site-title']  ?? '',
+];
+
+// Overlay with JSON config file if supplied (CLI flags take precedence)
+if (isset($opts['config'])) {
+    $configPath = $opts['config'];
+    if (!file_exists($configPath)) {
+        fwrite(STDERR, "Error: config file not found: $configPath\n");
+        exit(1);
+    }
+    $json = json_decode(file_get_contents($configPath), true);
+    if (!is_array($json)) {
+        fwrite(STDERR, "Error: config file is not valid JSON.\n");
+        exit(1);
+    }
+    // JSON values fill in blanks; explicit CLI flags win
+    foreach (['admin_user', 'admin_pass', 'admin_email', 'site_title'] as $key) {
+        $cliKey = str_replace('_', '-', $key);
+        if (($params[$key] ?? '') === '' && isset($json[$key])) {
+            $params[$key] = (string)$json[$key];
+        }
+    }
+}
+
+// ── Pre-flight checks ─────────────────────────────────────────────────────────
+
+$force = isset($opts['force']);
+
+if (!$force && InstallService::isInstalled()) {
+    fwrite(STDERR, "Already installed. Use --force to reinstall (this will add a second admin user).\n");
+    exit(1);
+}
+
+// ── Validate ──────────────────────────────────────────────────────────────────
+
+$errors = InstallService::validate($params);
+if (!empty($errors)) {
+    foreach ($errors as $err) {
+        fwrite(STDERR, "Error: $err\n");
+    }
+    fwrite(STDERR, "\nRun `php bin/install --help` for usage.\n");
+    exit(1);
+}
+
+// ── Run ───────────────────────────────────────────────────────────────────────
+
+try {
+    // If --force, temporarily remove the lock so InstallService doesn't bail
+    $lockFile = Config::rootPath() . '/data/installed.lock';
+    if ($force && file_exists($lockFile)) {
+        unlink($lockFile);
+    }
+
+    InstallService::run($params);
+
+    $username = trim($params['admin_user']);
+    fwrite(STDOUT, "Installation complete.\n");
+    fwrite(STDOUT, "Admin user '$username' created. Log in at /login.\n");
+    exit(0);
+} catch (\RuntimeException $e) {
+    fwrite(STDERR, "Installation failed: " . $e->getMessage() . "\n");
+    exit(1);
+}

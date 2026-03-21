@@ -1,0 +1,141 @@
+name: Release and deploy demo
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          tools: composer
+
+      - name: Install dependencies
+        run: composer install --no-dev --optimize-autoloader --no-interaction
+
+      - name: Build release zip
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          DIRNAME="plainbooru-${TAG}"
+          mkdir "${DIRNAME}"
+          rsync -a \
+            --exclude=".git" \
+            --exclude=".github" \
+            --exclude="node_modules" \
+            --exclude="data" \
+            --exclude="storage" \
+            --exclude=".env" \
+            --exclude="${DIRNAME}" \
+            . "${DIRNAME}/"
+          zip -r "plainbooru-${TAG}.zip" "${DIRNAME}/"
+
+      - name: Upload zip to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "${TAG}" "plainbooru-${TAG}.zip" --clobber
+
+  deploy-demo:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          tools: composer
+
+      - name: Install dependencies
+        run: composer install --no-dev --optimize-autoloader --no-interaction
+
+      - name: Setup SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.CPANEL_SSH_KEY }}
+
+      - name: Deploy to plainbooru.patrickwasp.com
+        shell: bash
+        env:
+          CPANEL_HOST: ${{ secrets.CPANEL_HOST }}
+          CPANEL_USER: ${{ secrets.CPANEL_USER }}
+          CPANEL_SSH_PORT: ${{ secrets.CPANEL_SSH_PORT }}
+        run: |
+          set -euo pipefail
+
+          REMOTE_BASE="/home/${CPANEL_USER}/plainbooru.patrickwasp.com"
+          echo "Deploying to: ${REMOTE_BASE}"
+
+          # Ensure app and runtime directories exist
+          ssh -p "${CPANEL_SSH_PORT}" -o StrictHostKeyChecking=no \
+            "${CPANEL_USER}@${CPANEL_HOST}" \
+            "mkdir -p '${REMOTE_BASE}/data' '${REMOTE_BASE}/storage/uploads' '${REMOTE_BASE}/storage/thumbs'"
+
+          # Sync app files — preserve data/ and storage/ on the server
+          rsync -azv --delete --stats \
+            --exclude="data/" \
+            --exclude="storage/" \
+            --exclude=".env" \
+            -e "ssh -p ${CPANEL_SSH_PORT} -o StrictHostKeyChecking=no" \
+            ./ \
+            "${CPANEL_USER}@${CPANEL_HOST}:${REMOTE_BASE}/"
+
+      - name: Install and configure demo
+        shell: bash
+        env:
+          CPANEL_HOST: ${{ secrets.CPANEL_HOST }}
+          CPANEL_USER: ${{ secrets.CPANEL_USER }}
+          CPANEL_SSH_PORT: ${{ secrets.CPANEL_SSH_PORT }}
+          PLAINBOORU_ADMIN_USER: ${{ secrets.PLAINBOORU_ADMIN_USER }}
+          PLAINBOORU_ADMIN_PASS: ${{ secrets.PLAINBOORU_ADMIN_PASS }}
+        run: |
+          set -euo pipefail
+
+          REMOTE_BASE="/home/${CPANEL_USER}/plainbooru.patrickwasp.com"
+
+          ssh -p "${CPANEL_SSH_PORT}" -o StrictHostKeyChecking=no \
+            "${CPANEL_USER}@${CPANEL_HOST}" \
+            "cd '${REMOTE_BASE}' && bash -s" <<EOF
+          set -euo pipefail
+
+          # First-time install only
+          if [ ! -f data/installed.lock ]; then
+            php bin/install \
+              --admin-user='${PLAINBOORU_ADMIN_USER}' \
+              --admin-pass='${PLAINBOORU_ADMIN_PASS}'
+          fi
+
+          # Always ensure registration is disabled (idempotent)
+          php -r "
+            require 'vendor/autoload.php';
+            \Plainbooru\Config::load();
+            \$db = \Plainbooru\Db::get();
+            \$db->exec(\"INSERT OR REPLACE INTO settings(key,value) VALUES('registration_enabled','0')\");
+            echo 'Registration disabled' . PHP_EOL;
+          "
+          EOF
+
+      - name: Deployment summary
+        shell: bash
+        run: |
+          echo "### ✓ Demo Deployment Complete" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "🌐 **Live URL:** https://plainbooru.patrickwasp.com/" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Release:** \`${{ github.event.release.tag_name }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Commit:** \`${{ github.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
