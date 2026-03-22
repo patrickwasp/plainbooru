@@ -1,6 +1,10 @@
 # PHP
 /vendor/
 
+# Static ffmpeg binaries (downloaded by CI, not committed)
+/bin/ffmpeg
+/bin/ffprobe
+
 # Node
 /node_modules/
 

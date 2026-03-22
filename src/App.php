@@ -535,9 +535,28 @@ final class App
             $pdo      = Db::get();
             $rows     = $pdo->query('SELECT key, value FROM settings')->fetchAll(\PDO::FETCH_KEY_PAIR);
             $settings = array_merge(Settings::defaults(), $rows);
+            $iniToBytes = static function (string $v): int {
+                $v = trim($v);
+                $last = strtolower($v[-1] ?? '');
+                $n = (int)$v;
+                return match ($last) {
+                    'g' => $n * 1_073_741_824,
+                    'm' => $n * 1_048_576,
+                    'k' => $n * 1_024,
+                    default => $n,
+                };
+            };
+            $phpLimits = [
+                'upload_max_filesize'       => ini_get('upload_max_filesize') ?: '?',
+                'upload_max_filesize_bytes' => $iniToBytes(ini_get('upload_max_filesize') ?: '0'),
+                'post_max_size'             => ini_get('post_max_size') ?: '?',
+                'post_max_size_bytes'       => $iniToBytes(ini_get('post_max_size') ?: '0'),
+            ];
             $html = $renderer->render('admin/site_settings', [
-                'title'    => 'Site Settings – Admin – plainbooru',
-                'settings' => $settings,
+                'title'     => 'Site Settings – Admin – plainbooru',
+                'settings'  => $settings,
+                'diag'      => ThumbService::diagnostics(),
+                'phpLimits' => $phpLimits,
             ]);
             $resp->getBody()->write($html);
             return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
@@ -1291,12 +1310,15 @@ final class App
             if (!file_exists($path)) {
                 return $resp->withStatus(404);
             }
-            // Check for nginx X-Accel-Redirect
+            // Check for nginx X-Accel-Redirect (Nginx handles range requests natively)
             if (Config::get('NGINX_ACCEL') === 'true') {
                 return $resp
                     ->withHeader('X-Accel-Redirect', '/internal/uploads/' . $media['stored_name'])
                     ->withHeader('Content-Type', $media['mime'])
                     ->withHeader('Content-Disposition', 'inline; filename="' . $media['original_name'] . '"');
+            }
+            if ($media['kind'] === 'video') {
+                return self::serveVideo($resp, $req, $path, $media['mime'], $media['original_name']);
             }
             return self::serveFile($resp, $path, $media['mime'], $media['original_name']);
         });
@@ -1672,6 +1694,45 @@ final class App
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────
+
+    private static function serveVideo(Response $resp, Request $req, string $path, string $mime, ?string $name = null): Response
+    {
+        $size = filesize($path);
+        $r = $resp
+            ->withHeader('Content-Type', $mime)
+            ->withHeader('Accept-Ranges', 'bytes')
+            ->withHeader('X-Content-Type-Options', 'nosniff');
+
+        if ($name) {
+            $r = $r->withHeader('Content-Disposition', 'inline; filename="' . addslashes($name) . '"');
+        }
+
+        $rangeHeader = $req->getHeaderLine('Range');
+        if ($rangeHeader && preg_match('/^bytes=(\d*)-(\d*)$/', $rangeHeader, $m)) {
+            $start = $m[1] !== '' ? (int)$m[1] : 0;
+            $end   = $m[2] !== '' ? (int)$m[2] : $size - 1;
+            $end   = min($end, $size - 1);
+
+            if ($start > $end || $start >= $size) {
+                return $resp->withStatus(416)->withHeader('Content-Range', "bytes */$size");
+            }
+
+            $length = $end - $start + 1;
+            $fh = fopen($path, 'rb');
+            fseek($fh, $start);
+            $data = fread($fh, $length);
+            fclose($fh);
+
+            return $r->withStatus(206)
+                ->withBody((new StreamFactory())->createStream($data))
+                ->withHeader('Content-Length', (string)$length)
+                ->withHeader('Content-Range', "bytes $start-$end/$size");
+        }
+
+        return $r
+            ->withBody((new StreamFactory())->createStreamFromFile($path))
+            ->withHeader('Content-Length', (string)$size);
+    }
 
     private static function serveFile(Response $resp, string $path, string $mime, ?string $name = null, int $maxAge = 0): Response
     {

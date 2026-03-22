@@ -208,4 +208,66 @@ $roles = ['user', 'trusted'];
 
   </form>
 
+  <!-- Server Status -->
+  <section class="card shadow-sm overflow-hidden p-0 gap-0">
+    <div class="px-6 py-4 border-b border-border bg-muted/30">
+      <h2 class="text-sm font-semibold">Server Status</h2>
+    </div>
+    <div class="px-6 py-6 grid gap-3">
+      <?php
+      $checks = [
+          'gd'      => ['label' => 'GD extension',         'ok' => $diag['gd'],      'warn' => 'Image thumbnails will not work.'],
+          'gd_webp' => ['label' => 'GD WebP support',      'ok' => $diag['gd_webp'], 'warn' => 'Thumbnails will be saved as JPEG instead of WebP.'],
+          'ffmpeg'  => ['label' => 'ffmpeg',                'ok' => $diag['ffmpeg'],  'warn' => 'Video thumbnails will be a grey placeholder. Install ffmpeg to generate real frames.'],
+          'ffprobe' => ['label' => 'ffprobe',               'ok' => $diag['ffprobe'], 'warn' => 'Video duration will not be detected.'],
+      ];
+      foreach ($checks as $check):
+      ?>
+        <div class="flex items-start gap-3 text-sm">
+          <?php if ($check['ok']): ?>
+            <span class="text-green-600 font-mono mt-0.5">✓</span>
+            <span class="text-muted-foreground"><?= $this->e($check['label']) ?></span>
+          <?php else: ?>
+            <span class="text-destructive font-mono mt-0.5">✗</span>
+            <div>
+              <span class="font-medium"><?= $this->e($check['label']) ?></span>
+              <span class="text-muted-foreground"> — not found. <?= $this->e($check['warn']) ?></span>
+            </div>
+          <?php endif; ?>
+        </div>
+      <?php endforeach; ?>
+
+      <?php
+      $configuredBytes = (int)($settings['max_upload_mb'] ?? 50) * 1_048_576;
+      $effectiveBytes  = min($phpLimits['upload_max_filesize_bytes'], $phpLimits['post_max_size_bytes']);
+      $limitOk         = $effectiveBytes >= $configuredBytes;
+      ?>
+      <div class="border-t border-border mt-2 pt-4 grid gap-2">
+        <p class="text-xs font-medium text-muted-foreground uppercase tracking-wide">PHP upload limits</p>
+        <div class="grid gap-1 text-sm font-mono">
+          <div class="flex gap-4">
+            <span class="text-muted-foreground w-44">upload_max_filesize</span>
+            <span><?= $this->e($phpLimits['upload_max_filesize']) ?></span>
+          </div>
+          <div class="flex gap-4">
+            <span class="text-muted-foreground w-44">post_max_size</span>
+            <span><?= $this->e($phpLimits['post_max_size']) ?></span>
+          </div>
+        </div>
+        <?php if (!$limitOk):
+          $bottleneck = $phpLimits['upload_max_filesize_bytes'] < $phpLimits['post_max_size_bytes']
+              ? $phpLimits['upload_max_filesize']
+              : $phpLimits['post_max_size'];
+        ?>
+          <p class="text-sm text-destructive mt-1">
+            Warning: the configured max upload size (<?= (int)($settings['max_upload_mb'] ?? 50) ?> MB) exceeds PHP's effective limit
+            (<?= $this->e($bottleneck) ?>).
+            Uploads larger than the PHP limit will fail regardless of this setting.
+            Raise <code>upload_max_filesize</code> and <code>post_max_size</code> in your <code>php.ini</code> or <code>.user.ini</code>.
+          </p>
+        <?php endif; ?>
+      </div>
+    </div>
+  </section>
+
 </div>

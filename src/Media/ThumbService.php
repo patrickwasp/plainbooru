@@ -10,7 +10,7 @@ final class ThumbService
 {
     public static function generate(string $storedName, string $mime, int $mediaId): bool
     {
-        $thumbPath = Config::thumbsPath() . '/' . $mediaId . '.webp';
+        $thumbPath = Config::thumbsPath() . '/' . $mediaId . '.' . self::thumbExt();
         if (file_exists($thumbPath)) {
             return true;
         }
@@ -123,7 +123,7 @@ final class ThumbService
 
     private static function findBin(string $name): ?string
     {
-        foreach (["/usr/bin/$name", "/usr/local/bin/$name", "/bin/$name"] as $p) {
+        foreach ([Config::rootPath() . '/bin/' . $name, "/usr/bin/$name", "/usr/local/bin/$name", "/bin/$name"] as $p) {
             if (is_executable($p)) {
                 return $p;
             }
@@ -131,6 +131,16 @@ final class ThumbService
         $which = shell_exec('which ' . escapeshellarg($name) . ' 2>/dev/null');
         $p = $which ? trim($which) : null;
         return ($p && is_executable($p)) ? $p : null;
+    }
+
+    public static function diagnostics(): array
+    {
+        return [
+            'ffmpeg'  => (bool)self::findBin('ffmpeg'),
+            'ffprobe' => (bool)self::findBin('ffprobe'),
+            'gd'      => function_exists('imagecreatetruecolor'),
+            'gd_webp' => function_exists('imagewebp'),
+        ];
     }
 
     public static function thumbMime(): string

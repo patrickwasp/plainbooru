@@ -27,6 +27,12 @@ jobs:
       - name: Install dependencies
         run: composer install --no-dev --optimize-autoloader --no-interaction
 
+      - name: Download static ffmpeg binaries
+        run: |
+          curl -fsSL -o bin/ffmpeg  "https://github.com/shaka-project/static-ffmpeg-binaries/releases/latest/download/ffmpeg-linux-x64"
+          curl -fsSL -o bin/ffprobe "https://github.com/shaka-project/static-ffmpeg-binaries/releases/latest/download/ffprobe-linux-x64"
+          chmod +x bin/ffmpeg bin/ffprobe
+
       - name: Build release zip
         env:
           TAG: ${{ github.event.release.tag_name }}
@@ -66,6 +72,12 @@ jobs:
 
       - name: Install dependencies
         run: composer install --no-dev --optimize-autoloader --no-interaction
+
+      - name: Download static ffmpeg binaries
+        run: |
+          curl -fsSL -o bin/ffmpeg  "https://github.com/shaka-project/static-ffmpeg-binaries/releases/latest/download/ffmpeg-linux-x64"
+          curl -fsSL -o bin/ffprobe "https://github.com/shaka-project/static-ffmpeg-binaries/releases/latest/download/ffprobe-linux-x64"
+          chmod +x bin/ffmpeg bin/ffprobe
 
       - name: Setup SSH agent
         uses: webfactory/ssh-agent@v0.9.0
