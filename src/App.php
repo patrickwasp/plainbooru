@@ -288,10 +288,11 @@ final class App
             }
             $params = $req->getQueryParams();
             $html = $renderer->render('login', [
-                'title'     => 'Log in – plainbooru',
-                'mainClass' => 'flex-1 flex items-center justify-center px-4 py-12',
-                'error'     => null,
-                'next'      => $params['next'] ?? '/',
+                'title'                => 'Log in – plainbooru',
+                'mainClass'            => 'flex-1 flex items-center justify-center px-4 py-12',
+                'error'                => null,
+                'next'                 => $params['next'] ?? '/',
+                'registration_enabled' => Settings::getBool('registration_enabled', true),
             ]);
             $resp->getBody()->write($html);
             return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
@@ -311,10 +312,11 @@ final class App
                 return $resp->withStatus(302)->withHeader('Location', $next);
             } catch (\RuntimeException $e) {
                 $html = $renderer->render('login', [
-                    'title'     => 'Log in – plainbooru',
-                    'mainClass' => 'flex-1 flex items-center justify-center px-4 py-12',
-                    'error'     => $e->getMessage(),
-                    'next'      => $next,
+                    'title'                => 'Log in – plainbooru',
+                    'mainClass'            => 'flex-1 flex items-center justify-center px-4 py-12',
+                    'error'                => $e->getMessage(),
+                    'next'                 => $next,
+                    'registration_enabled' => Settings::getBool('registration_enabled', true),
                 ]);
                 $resp->getBody()->write($html);
                 return $resp->withStatus(401)->withHeader('Content-Type', 'text/html; charset=utf-8');
@@ -323,6 +325,9 @@ final class App
 
         // GET /signup
         $app->get('/signup', function (Request $req, Response $resp) use ($renderer) {
+            if (!Settings::getBool('registration_enabled', true)) {
+                return $resp->withStatus(302)->withHeader('Location', '/login');
+            }
             if (UserService::current()) {
                 return $resp->withStatus(302)->withHeader('Location', '/');
             }
@@ -337,6 +342,9 @@ final class App
 
         // POST /signup
         $app->post('/signup', function (Request $req, Response $resp) use ($renderer) {
+            if (!Settings::getBool('registration_enabled', true)) {
+                return $resp->withStatus(302)->withHeader('Location', '/login');
+            }
             $params   = $req->getParsedBody();
             $username = trim($params['username'] ?? '');
             $password = $params['password'] ?? '';

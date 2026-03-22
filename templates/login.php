@@ -36,9 +36,11 @@
       <button type="submit" class="btn-primary">Log in</button>
     </form>
 
+    <?php if ($registration_enabled ?? true): ?>
     <p class="mt-5 text-sm text-muted-foreground">
       No account? <a href="/signup" class="underline hover:text-foreground">Sign up</a>
     </p>
+    <?php endif; ?>
   </div>
 
 </div>
