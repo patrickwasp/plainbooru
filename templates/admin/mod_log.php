@@ -1,7 +1,9 @@
 <?php
 // admin/mod_log.php
 ?>
-<div class="max-w-4xl flex flex-col gap-6">
+<div class="max-w-5xl flex flex-col gap-6">
+
+  <?= $this->partial('admin/nav', ['adminSection' => 'mod-log', 'currentUser' => $currentUser]) ?>
 
   <div>
     <h1 class="text-2xl font-bold">Moderation Log</h1>

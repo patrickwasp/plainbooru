@@ -11,7 +11,37 @@
  */
 ?>
 <?php if ($totalPages > 1): ?>
+  <?php if ($compact ?? false): ?>
+  <nav role="navigation" aria-label="pagination" class="flex md:hidden w-full justify-center <?= $class ?? 'mt-6' ?>">
+    <ul class="flex flex-row items-center gap-2">
+      <li>
+        <?php if ($page > 1): ?>
+          <a href="<?= $base ?>page=<?= $page - 1 ?>" class="btn-icon-ghost" aria-label="Previous">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+          </a>
+        <?php else: ?>
+          <span class="btn-icon-ghost opacity-50 cursor-default" aria-disabled="true">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+          </span>
+        <?php endif; ?>
+      </li>
+<li>
+        <?php if ($page < $totalPages): ?>
+          <a href="<?= $base ?>page=<?= $page + 1 ?>" class="btn-icon-ghost" aria-label="Next">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+          </a>
+        <?php else: ?>
+          <span class="btn-icon-ghost opacity-50 cursor-default" aria-disabled="true">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+          </span>
+        <?php endif; ?>
+      </li>
+    </ul>
+  </nav>
+  <nav role="navigation" aria-label="pagination" class="hidden md:flex w-full justify-center <?= $class ?? 'mt-6' ?>">
+  <?php else: ?>
   <nav role="navigation" aria-label="pagination" class="mx-auto flex w-full justify-center <?= $class ?? 'mt-6' ?>">
+  <?php endif; ?>
     <ul class="flex flex-row items-center gap-1">
       <li>
         <?php if ($page > 1): ?>

@@ -31,6 +31,11 @@ final class Settings
             'rate_limit_uploads_per_hour'  => '20',
             'rate_limit_comments_per_hour' => '30',
             'rate_limit_api_per_minute'    => '300',
+            'site_description'             => '',
+            'require_login_to_view'        => '0',
+            'maintenance_mode'             => '0',
+            'maintenance_message'          => 'Site is under maintenance. Please check back soon.',
+            'max_tags_per_media'           => '50',
         ];
     }
 
@@ -110,6 +115,7 @@ final class Settings
         return match ($key) {
             'items_per_page'                => (string)max(5, min(100, (int)$value)),
             'max_upload_mb'                 => (string)max(1, min(2048, (int)$value)),
+            'max_tags_per_media'            => (string)max(1, min(200, (int)$value)),
             'rate_limit_uploads_per_hour'   => (string)max(1, min(10000, (int)$value)),
             'rate_limit_comments_per_hour'  => (string)max(1, min(10000, (int)$value)),
             'rate_limit_api_per_minute'     => (string)max(1, min(10000, (int)$value)),
@@ -120,7 +126,9 @@ final class Settings
             'anon_can_comment',
             'anon_can_vote',
             'anon_can_create_pool',
-            'anon_can_edit_tags'   => in_array($value, ['0', '1'], true) ? $value : '0',
+            'anon_can_edit_tags',
+            'require_login_to_view',
+            'maintenance_mode'     => in_array($value, ['0', '1'], true) ? $value : '0',
             default                => $value,
         };
     }

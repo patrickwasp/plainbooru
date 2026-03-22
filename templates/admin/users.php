@@ -3,7 +3,9 @@
 /** @var array $currentUser */
 $roles = ['user', 'trusted', 'moderator', 'admin'];
 ?>
-<div class="max-w-5xl mx-auto flex flex-col gap-6">
+<div class="max-w-5xl flex flex-col gap-6">
+
+  <?= $this->partial('admin/nav', ['adminSection' => 'users', 'currentUser' => $currentUser]) ?>
 
   <div>
     <h1 class="text-2xl font-bold">Users</h1>

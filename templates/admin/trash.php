@@ -17,7 +17,9 @@
 /** @var int    $commentPage         */
 /** @var int    $commentsTotalPages  */
 ?>
-<div class="max-w-5xl flex flex-col gap-10">
+<div class="max-w-5xl flex flex-col gap-6">
+
+  <?= $this->partial('admin/nav', ['adminSection' => 'trash', 'currentUser' => $currentUser]) ?>
 
   <div>
     <h1 class="text-2xl font-bold">Trash</h1>

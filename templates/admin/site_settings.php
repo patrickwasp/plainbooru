@@ -2,7 +2,9 @@
 /** @var array $settings  — all current setting values keyed by name */
 $roles = ['user', 'trusted'];
 ?>
-<div class="max-w-3xl flex flex-col gap-8">
+<div class="max-w-5xl flex flex-col gap-6">
+
+  <?= $this->partial('admin/nav', ['adminSection' => 'settings', 'currentUser' => $currentUser]) ?>
 
   <div>
     <h1 class="text-2xl font-bold">Site Settings</h1>
@@ -24,6 +26,14 @@ $roles = ['user', 'trusted'];
           <input id="site_title" type="text" name="site_title" required
                  value="<?= $this->e($settings['site_title'] ?? 'plainbooru') ?>"
                  class="input h-9 text-sm max-w-sm">
+        </div>
+
+        <div class="grid gap-2">
+          <label class="text-sm font-medium" for="site_description">Site description</label>
+          <input id="site_description" type="text" name="site_description"
+                 value="<?= $this->e($settings['site_description'] ?? '') ?>"
+                 class="input h-9 text-sm max-w-lg" placeholder="A booru-style media archive">
+          <p class="text-xs text-muted-foreground">Used in meta tags and the home page. Leave blank to omit.</p>
         </div>
 
         <div class="flex items-center gap-3">
@@ -100,6 +110,61 @@ $roles = ['user', 'trusted'];
             <label class="text-sm" for="<?= $this->e($key) ?>"><?= $this->e($label) ?></label>
           </div>
         <?php endforeach; ?>
+      </div>
+    </section>
+
+    <!-- Access Control -->
+    <section class="card shadow-sm overflow-hidden p-0 gap-0">
+      <div class="px-6 py-4 border-b border-border bg-muted/30">
+        <h2 class="text-sm font-semibold">Access Control</h2>
+      </div>
+      <div class="px-6 py-6 grid gap-6">
+
+        <div class="flex items-center gap-3">
+          <input id="require_login_to_view" type="checkbox" name="require_login_to_view" value="1"
+                 class="checkbox" <?= ($settings['require_login_to_view'] ?? '0') === '1' ? 'checked' : '' ?>>
+          <div>
+            <label class="text-sm" for="require_login_to_view">Require login to browse</label>
+            <p class="text-xs text-muted-foreground">Anonymous visitors are redirected to the login page.</p>
+          </div>
+        </div>
+
+        <div class="grid gap-3">
+          <div class="flex items-center gap-3">
+            <input id="maintenance_mode" type="checkbox" name="maintenance_mode" value="1"
+                   class="checkbox" <?= ($settings['maintenance_mode'] ?? '0') === '1' ? 'checked' : '' ?>>
+            <div>
+              <label class="text-sm" for="maintenance_mode">Maintenance mode</label>
+              <p class="text-xs text-muted-foreground">Non-admins see a maintenance page (HTTP 503). Admins can still browse normally.</p>
+            </div>
+          </div>
+
+          <div class="grid gap-2 pl-7">
+            <label class="text-sm font-medium" for="maintenance_message">Maintenance message</label>
+            <input id="maintenance_message" type="text" name="maintenance_message"
+                   value="<?= $this->e($settings['maintenance_message'] ?? 'Site is under maintenance. Please check back soon.') ?>"
+                   class="input h-9 text-sm max-w-lg">
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- Content Policy -->
+    <section class="card shadow-sm overflow-hidden p-0 gap-0">
+      <div class="px-6 py-4 border-b border-border bg-muted/30">
+        <h2 class="text-sm font-semibold">Content Policy</h2>
+      </div>
+      <div class="px-6 py-6 grid gap-6">
+
+        <div class="grid gap-2">
+          <label class="text-sm font-medium" for="max_tags_per_media">Max tags per item</label>
+          <input id="max_tags_per_media" type="number" name="max_tags_per_media" min="1" max="200"
+                 value="<?= (int)($settings['max_tags_per_media'] ?? 50) ?>"
+                 class="input h-9 text-sm w-24">
+          <p class="text-xs text-muted-foreground">1 – 200. Enforced when adding tags to a media item.</p>
+        </div>
+
       </div>
     </section>
 

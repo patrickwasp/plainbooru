@@ -11,5 +11,5 @@
     <?php endforeach; ?>
   </div>
 
-  <?= $this->partial('pagination', ['page' => $page, 'totalPages' => $totalPages, 'base' => '/?', 'class' => 'mt-8']) ?>
+  <?= $this->partial('pagination', ['page' => $page, 'totalPages' => $totalPages, 'base' => '/?', 'class' => 'mt-8', 'compact' => (($_SESSION['sidebar'] ?? 'auto') === 'shown')]) ?>
 <?php endif; ?>

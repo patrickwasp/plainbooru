@@ -122,6 +122,43 @@ final class App
             return $handler->handle($req);
         });
 
+        // Maintenance mode — serve 503 to non-admins when maintenance_mode is enabled.
+        // Exempt: /admin/*, /login, /logout, /install
+        $app->add(function (Request $req, $handler) use ($renderer) {
+            $path = $req->getUri()->getPath();
+            $exempt = $path === '/login' || $path === '/logout' || $path === '/install'
+                || str_starts_with($path, '/admin');
+            if (!$exempt && Settings::getBool('maintenance_mode', false)) {
+                $user = UserService::current();
+                if (!Guard::atLeast('admin', $user)) {
+                    $message = Settings::getString('maintenance_message', 'Site is under maintenance. Please check back soon.');
+                    $html = $renderer->render('maintenance', [
+                        'title'   => 'Maintenance',
+                        'message' => $message,
+                    ]);
+                    $resp = new \Slim\Psr7\Response(503);
+                    $resp->getBody()->write($html);
+                    return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
+                }
+            }
+            return $handler->handle($req);
+        });
+
+        // Require login — redirect anonymous users to /login when require_login_to_view is on.
+        // Exempt: /login, /register, /logout, /install, /api/*
+        $app->add(function (Request $req, $handler) {
+            $path = $req->getUri()->getPath();
+            $exempt = $path === '/login' || $path === '/register' || $path === '/logout'
+                || $path === '/install' || str_starts_with($path, '/api/');
+            if (!$exempt && Settings::getBool('require_login_to_view', false)) {
+                if (UserService::current() === null) {
+                    $resp = new \Slim\Psr7\Response(302);
+                    return $resp->withHeader('Location', '/login');
+                }
+            }
+            return $handler->handle($req);
+        });
+
         // Install guard — redirect to /install if not yet installed, or away from
         // /install if already done. Added last so it runs outermost (first on request).
         $app->add(function (Request $req, $handler) {
@@ -213,6 +250,18 @@ final class App
             ]);
             $resp->getBody()->write($html);
             return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
+        });
+
+        // POST /sidebar – toggle sidebar visibility in session
+        $app->post('/sidebar', function (Request $req, Response $resp) {
+            $params  = $req->getParsedBody();
+            $current = $_SESSION['sidebar'] ?? 'auto';
+            $_SESSION['sidebar'] = ($current === 'hidden') ? 'shown' : 'hidden';
+            $return = $params['return'] ?? '/';
+            if (!str_starts_with($return, '/') || str_starts_with($return, '//')) {
+                $return = '/';
+            }
+            return $resp->withStatus(302)->withHeader('Location', $return);
         });
 
         // POST /theme – toggle dark/light mode cookie
@@ -493,7 +542,8 @@ final class App
             $body = (array)($req->getParsedBody() ?? []);
 
             $boolKeys = ['registration_enabled','anon_can_upload','anon_can_comment',
-                         'anon_can_vote','anon_can_create_pool','anon_can_edit_tags'];
+                         'anon_can_vote','anon_can_create_pool','anon_can_edit_tags',
+                         'require_login_to_view','maintenance_mode'];
 
             foreach (Settings::defaults() as $key => $default) {
                 if (in_array($key, $boolKeys, true)) {
@@ -524,6 +574,10 @@ final class App
         // POST /upload
         $app->post('/upload', function (Request $req, Response $resp) use ($renderer) {
             $uploadUser  = UserService::current();
+            if (!Policy::canUpload($uploadUser)) {
+                Flash::set('error', 'You do not have permission to upload.');
+                return $resp->withStatus(302)->withHeader('Location', '/upload');
+            }
             $uploadLimit = Settings::getInt('rate_limit_uploads_per_hour', 20);
             $uploadKey   = RateLimiter::key('upload', $uploadUser ? (int)$uploadUser['id'] : null);
             if (!RateLimiter::hit($uploadKey, $uploadLimit, 3600)) {
@@ -630,6 +684,11 @@ final class App
             $body = (array)($req->getParsedBody() ?? []);
             $tag  = trim($body['tag'] ?? '');
             if ($tag !== '') {
+                $maxTags = Settings::getInt('max_tags_per_media', 50);
+                if (count(MediaService::getTags($id)) >= $maxTags) {
+                    Flash::set('error', "Tag limit reached ({$maxTags} max).");
+                    return $resp->withStatus(302)->withHeader('Location', '/m/' . $id);
+                }
                 MediaService::addTags($media, $tag);
             }
             return $resp->withStatus(302)->withHeader('Location', '/m/' . $id);

@@ -1,4 +1,12 @@
-<?php $isDark = ($_COOKIE['theme'] ?? '') === 'dark'; ?>
+<?php
+$isDark      = ($_COOKIE['theme'] ?? '') === 'dark';
+$sidebarState = $_SESSION['sidebar'] ?? 'auto'; // 'auto' | 'hidden' | 'shown'
+$sidebarAsideClass = match($sidebarState) {
+    'shown'  => 'w-64 shrink-0 border-l border-border flex flex-col overflow-y-auto',
+    'hidden' => 'hidden',
+    default  => 'hidden md:flex w-64 shrink-0 border-l border-border flex-col overflow-y-auto',
+};
+?>
 <!doctype html>
 <html lang="en" class="h-full<?= $isDark ? ' dark' : '' ?>">
 <head>
@@ -19,29 +27,36 @@
         <?php if ($can_upload): ?>
           <a href="/upload" class="btn-ghost text-sm px-3 py-1 rounded-md hover:bg-accent">Upload</a>
         <?php endif; ?>
+        <span class="flex-1"></span>
         <?php if ($currentUser ?? null): ?>
           <?php $role = $currentUser['role'] ?? ''; ?>
           <details class="dropdown">
             <summary class="btn-ghost text-sm px-3 py-1 rounded-md hover:bg-accent cursor-pointer list-none"><?= $this->e($currentUser['username']) ?></summary>
-            <ul>
+            <ul dir="rtl">
               <li><a href="/settings/account">My account</a></li>
               <?php if (in_array($role, ['moderator', 'admin'], true)): ?>
-                <li><a href="/admin/mod-log">Moderation</a></li>
-              <?php endif; ?>
-              <?php if ($role === 'admin'): ?>
-                <li><a href="/admin/users">Administration</a></li>
+                <li><a href="<?= $role === 'admin' ? '/admin/users' : '/admin/mod-log' ?>">Admin</a></li>
               <?php endif; ?>
               <li><hr class="border-border my-1"></li>
               <li>
                 <form action="/logout" method="post">
                   <?= $this->csrfInput() ?>
-                  <button type="submit" class="text-destructive w-full text-left">Log out</button>
+                  <button type="submit" class="text-destructive w-full text-right">Log out</button>
                 </form>
               </li>
             </ul>
           </details>
         <?php else: ?>
           <a href="/login" class="btn-ghost text-sm px-3 py-1 rounded-md hover:bg-accent">Log in</a>
+        <?php endif; ?>
+        <?php if (isset($sidebar)): ?>
+        <form action="/sidebar" method="post">
+          <?= $this->csrfInput() ?>
+          <input type="hidden" name="return" value="<?= $this->e($_SERVER['REQUEST_URI'] ?? '/') ?>">
+          <button type="submit" class="btn-ghost h-8 w-8 flex items-center justify-center rounded-md" title="Toggle sidebar">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/></svg>
+          </button>
+        </form>
         <?php endif; ?>
       </nav>
       <form action="/search" method="get" class="flex gap-1 ml-auto">
@@ -64,37 +79,48 @@
   </header>
 
   <!-- Mobile nav -->
-  <div class="flex md:hidden gap-1 px-2 border-b border-border bg-background overflow-x-auto sticky top-14 z-40 h-10 items-center">
-    <a href="/tags" class="text-xs px-2 py-1 rounded hover:bg-accent">Tags</a>
-    <a href="/pools" class="text-xs px-2 py-1 rounded hover:bg-accent">Pools</a>
-    <?php if ($can_upload): ?>
-      <a href="/upload" class="text-xs px-2 py-1 rounded hover:bg-accent">Upload</a>
-    <?php endif; ?>
-    <span class="flex-1"></span>
-    <?php if ($currentUser ?? null): ?>
-      <?php $role = $currentUser['role'] ?? ''; ?>
-      <details class="dropdown">
-        <summary class="text-xs px-2 py-1 rounded hover:bg-accent cursor-pointer list-none"><?= $this->e($currentUser['username']) ?></summary>
-        <ul dir="rtl">
-          <li><a href="/settings/account">My account</a></li>
-          <?php if (in_array($role, ['moderator', 'admin'], true)): ?>
-            <li><a href="/admin/mod-log">Moderation</a></li>
-          <?php endif; ?>
-          <?php if ($role === 'admin'): ?>
-            <li><a href="/admin/users">Administration</a></li>
-          <?php endif; ?>
-          <li><hr class="border-border my-1"></li>
-          <li>
-            <form action="/logout" method="post">
-              <?= $this->csrfInput() ?>
-              <button type="submit" class="text-destructive w-full text-right">Log out</button>
-            </form>
-          </li>
-        </ul>
-      </details>
-    <?php else: ?>
-      <a href="/login" class="text-xs px-2 py-1 rounded hover:bg-accent">Log in</a>
-    <?php endif; ?>
+  <div class="flex md:hidden border-b border-border bg-background sticky top-14 z-40 h-10 items-center">
+    <!-- scrollable links -->
+    <div class="flex gap-1 px-2 overflow-x-auto items-center h-full min-w-0 flex-1">
+      <a href="/tags" class="text-xs px-2 py-1 rounded hover:bg-accent shrink-0">Tags</a>
+      <a href="/pools" class="text-xs px-2 py-1 rounded hover:bg-accent shrink-0">Pools</a>
+      <?php if ($can_upload): ?>
+        <a href="/upload" class="text-xs px-2 py-1 rounded hover:bg-accent shrink-0">Upload</a>
+      <?php endif; ?>
+    </div>
+    <!-- right controls: not inside overflow container so dropdown is not clipped -->
+    <div class="flex items-center gap-1 px-2 shrink-0">
+      <?php if ($currentUser ?? null): ?>
+        <?php $role = $currentUser['role'] ?? ''; ?>
+        <details class="dropdown">
+          <summary class="text-xs px-2 py-1 rounded hover:bg-accent cursor-pointer list-none"><?= $this->e($currentUser['username']) ?></summary>
+          <ul dir="rtl">
+            <li><a href="/settings/account">My account</a></li>
+            <?php if (in_array($role, ['moderator', 'admin'], true)): ?>
+              <li><a href="<?= $role === 'admin' ? '/admin/users' : '/admin/mod-log' ?>">Admin</a></li>
+            <?php endif; ?>
+            <li><hr class="border-border my-1"></li>
+            <li>
+              <form action="/logout" method="post">
+                <?= $this->csrfInput() ?>
+                <button type="submit" class="text-destructive w-full text-right">Log out</button>
+              </form>
+            </li>
+          </ul>
+        </details>
+      <?php else: ?>
+        <a href="/login" class="text-xs px-2 py-1 rounded hover:bg-accent">Log in</a>
+      <?php endif; ?>
+      <?php if (isset($sidebar)): ?>
+      <form action="/sidebar" method="post">
+        <?= $this->csrfInput() ?>
+        <input type="hidden" name="return" value="<?= $this->e($_SERVER['REQUEST_URI'] ?? '/') ?>">
+        <button type="submit" class="h-8 w-8 flex items-center justify-center rounded hover:bg-accent" title="Toggle sidebar">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/></svg>
+        </button>
+      </form>
+      <?php endif; ?>
+    </div>
   </div>
 
   <!-- Flash messages -->
@@ -117,7 +143,7 @@
     <div class="flex-1 min-w-0 overflow-y-auto px-4 py-6">
       <?= $content ?>
     </div>
-    <aside class="w-64 shrink-0 border-l border-border flex flex-col overflow-y-auto">
+    <aside class="<?= $sidebarAsideClass ?>">
       <?= $sidebar ?>
     </aside>
   </main>
