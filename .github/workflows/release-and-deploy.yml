@@ -88,6 +88,9 @@ jobs:
 
           # Sync app files — preserve data/ and storage/ on the server
           rsync -azv --delete --stats \
+            --exclude=".git/" \
+            --exclude=".github/" \
+            --exclude=".claude/" \
             --exclude="data/" \
             --exclude="storage/" \
             --exclude=".env" \

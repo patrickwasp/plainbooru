@@ -205,7 +205,7 @@ Add these in **GitHub → Settings → Secrets and variables → Actions**:
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `CPANEL_HOST`           | Server hostname or IP — shown in cPanel under **Server Information**                                                                                   |
 | `CPANEL_USER`           | Your cPanel username                                                                                                                                   |
-| `CPANEL_SSH_PORT`       | SSH port — cPanel hosts typically use `21098`; check with your host                                                                                    |
+| `CPANEL_SSH_PORT`       | SSH port — find it in **cPanel → SSH Access** (varies by host)                                                                                         |
 | `CPANEL_SSH_KEY`        | Private half of an SSH key pair — generate with `ssh-keygen -t ed25519`, then add the public key in **cPanel → SSH Access → Manage SSH Keys → Import** |
 | `PLAINBOORU_ADMIN_USER` | Admin username to create on first deploy                                                                                                               |
 | `PLAINBOORU_ADMIN_PASS` | Admin password to create on first deploy                                                                                                               |
