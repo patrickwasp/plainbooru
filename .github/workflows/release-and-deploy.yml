@@ -111,27 +111,29 @@ jobs:
 
           REMOTE_BASE="/home/${CPANEL_USER}/plainbooru.patrickwasp.com"
 
+          # Pass variables via SSH env prefix so the quoted heredoc stays literal
           ssh -p "${CPANEL_SSH_PORT}" -o StrictHostKeyChecking=no \
             "${CPANEL_USER}@${CPANEL_HOST}" \
-            "cd '${REMOTE_BASE}' && bash -s" <<EOF
+            "REMOTE_BASE='${REMOTE_BASE}' ADMIN_USER='${PLAINBOORU_ADMIN_USER}' ADMIN_PASS='${PLAINBOORU_ADMIN_PASS}' bash -s" <<'REMOTE_SCRIPT'
           set -euo pipefail
+          cd "${REMOTE_BASE}"
 
           # First-time install only
           if [ ! -f data/installed.lock ]; then
             php bin/install \
-              --admin-user='${PLAINBOORU_ADMIN_USER}' \
-              --admin-pass='${PLAINBOORU_ADMIN_PASS}'
+              --admin-user="${ADMIN_USER}" \
+              --admin-pass="${ADMIN_PASS}"
           fi
 
           # Always ensure registration is disabled (idempotent)
-          php -r "
-            require 'vendor/autoload.php';
+          php -r '
+            require "vendor/autoload.php";
             \Plainbooru\Config::load();
-            \$db = \Plainbooru\Db::get();
-            \$db->exec(\"INSERT OR REPLACE INTO settings(key,value) VALUES('registration_enabled','0')\");
-            echo 'Registration disabled' . PHP_EOL;
-          "
-          EOF
+            $db = \Plainbooru\Db::get();
+            $db->exec("INSERT OR REPLACE INTO settings(key,value) VALUES(\"registration_enabled\",\"0\")");
+            echo "Registration disabled\n";
+          '
+          REMOTE_SCRIPT
 
       - name: Deployment summary
         shell: bash
