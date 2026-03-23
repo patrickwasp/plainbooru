@@ -127,7 +127,7 @@ $sidebarAsideClass = match($sidebarState) {
 
   <!-- Flash messages -->
   <?php if (!empty($flash)): ?>
-    <div class="container mx-auto max-w-7xl px-4 pt-4 flex flex-col gap-2">
+    <div class="px-4 pt-4 flex flex-col gap-2">
       <?php foreach ($flash as $msg): ?>
         <?php $isError = ($msg['type'] === 'error'); ?>
         <div class="rounded-md border px-4 py-3 text-sm <?= $isError
@@ -150,7 +150,7 @@ $sidebarAsideClass = match($sidebarState) {
     </aside>
   </main>
   <?php else: ?>
-  <main class="<?= $this->e($mainClass ?? 'flex-1 container mx-auto px-4 py-6 max-w-7xl') ?>">
+  <main class="<?= $this->e($mainClass ?? 'flex-1 px-4 py-6') ?>">
     <?= $content ?>
   </main>
   <?php endif; ?>
