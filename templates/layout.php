@@ -19,7 +19,7 @@ $sidebarAsideClass = match($sidebarState) {
 
   <!-- Navbar -->
   <header class="sticky top-0 z-50 w-full border-b border-border bg-background/95 backdrop-blur">
-    <div class="container mx-auto flex h-14 max-w-7xl items-center gap-4 px-4">
+    <div class="flex h-14 items-center gap-4 px-4 w-full">
       <a href="/" class="text-xl font-bold"><?= $this->e($site_title ?? 'plainbooru') ?></a>
       <nav class="hidden md:flex gap-1 flex-1 items-center">
         <a href="/tags" class="btn-ghost text-sm px-3 py-1 rounded-md hover:bg-accent">Tags</a>

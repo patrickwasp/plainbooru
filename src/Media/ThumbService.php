@@ -8,11 +8,14 @@ use Plainbooru\Config;
 
 final class ThumbService
 {
-    public static function generate(string $storedName, string $mime, int $mediaId): bool
+    public static function generate(string $storedName, string $mime, int $mediaId, bool $force = false): bool
     {
         $thumbPath = Config::thumbsPath() . '/' . $mediaId . '.' . self::thumbExt();
-        if (file_exists($thumbPath)) {
+        if (!$force && file_exists($thumbPath)) {
             return true;
+        }
+        if ($force && file_exists($thumbPath)) {
+            @unlink($thumbPath);
         }
 
         $kind = Mime::kind($mime);
@@ -90,17 +93,35 @@ final class ThumbService
             return self::placeholderThumb($dest);
         }
 
+        // Output to a temp JPEG first — static ffmpeg binaries often lack libwebp.
+        // GD handles the final format conversion.
+        $tmp = sys_get_temp_dir() . '/pb_vthumb_' . getmypid() . '_' . mt_rand() . '.jpg';
         $cmd = sprintf(
-            '%s -y -i %s -ss 00:00:01 -vframes 1 -vf "scale=400:-1" %s 2>/dev/null',
+            '%s -y -ss 00:00:01 -i %s -vframes 1 -vf "scale=400:-1" -f image2 %s 2>&1',
             escapeshellarg($ffmpeg),
             escapeshellarg($src),
-            escapeshellarg($dest)
+            escapeshellarg($tmp)
         );
         exec($cmd, $out, $code);
-        if ($code !== 0 || !file_exists($dest)) {
+
+        if ($code !== 0 || !file_exists($tmp)) {
+            // Persist last error so admin diagnostics can surface it
+            @file_put_contents(sys_get_temp_dir() . '/pb_ffmpeg_last_err.txt', implode("\n", $out));
             return self::placeholderThumb($dest);
         }
-        return true;
+
+        $img = @imagecreatefromjpeg($tmp);
+        @unlink($tmp);
+
+        if (!$img) {
+            return self::placeholderThumb($dest);
+        }
+
+        $result = function_exists('imagewebp')
+            ? imagewebp($img, $dest, 80)
+            : imagejpeg($img, $dest, 85);
+        imagedestroy($img);
+        return $result ?: self::placeholderThumb($dest);
     }
 
     private static function placeholderThumb(string $dest): bool
@@ -154,19 +175,23 @@ final class ThumbService
             }
         }
 
+        $errFile = sys_get_temp_dir() . '/pb_ffmpeg_last_err.txt';
+        $lastErr = file_exists($errFile) ? trim((string)file_get_contents($errFile)) : null;
+
         return [
-            'ffmpeg'          => $ffmpeg !== null,
-            'ffmpeg_path'     => $ffmpeg,
-            'ffmpeg_version'  => $ffmpegVersion,
-            'ffprobe'         => $ffprobe !== null,
-            'ffprobe_path'    => $ffprobe,
-            'ffprobe_version' => $ffprobeVersion,
-            'gd'              => function_exists('imagecreatetruecolor'),
-            'gd_webp'         => function_exists('imagewebp'),
-            'exec_enabled'    => function_exists('exec'),
-            'shell_exec_enabled' => function_exists('shell_exec'),
-            'open_basedir'    => ini_get('open_basedir') ?: null,
-            'bin_path'        => Config::rootPath() . '/bin',
+            'ffmpeg'              => $ffmpeg !== null,
+            'ffmpeg_path'         => $ffmpeg,
+            'ffmpeg_version'      => $ffmpegVersion,
+            'ffprobe'             => $ffprobe !== null,
+            'ffprobe_path'        => $ffprobe,
+            'ffprobe_version'     => $ffprobeVersion,
+            'gd'                  => function_exists('imagecreatetruecolor'),
+            'gd_webp'             => function_exists('imagewebp'),
+            'exec_enabled'        => function_exists('exec'),
+            'shell_exec_enabled'  => function_exists('shell_exec'),
+            'open_basedir'        => ini_get('open_basedir') ?: null,
+            'bin_path'            => Config::rootPath() . '/bin',
+            'last_ffmpeg_error'   => $lastErr,
         ];
     }
 

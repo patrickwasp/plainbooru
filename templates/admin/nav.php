@@ -12,6 +12,7 @@ $links = [];
 if ($isAdmin) {
     $links[] = ['href' => '/admin/users',    'label' => 'Users',     'key' => 'users'];
     $links[] = ['href' => '/admin/settings', 'label' => 'Settings',  'key' => 'settings'];
+    $links[] = ['href' => '/admin/logs',     'label' => 'Logs',      'key' => 'logs'];
 }
 if ($isMod) {
     $links[] = ['href' => '/admin/queue',    'label' => 'Queue',     'key' => 'queue'];

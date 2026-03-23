@@ -195,14 +195,15 @@ final class MediaService
     }
 
     /**
-     * @param bool $includePending  When true, returns the row even if pending_at is set
-     *                              (used by moderators and the uploader viewing their own post).
+     * @param bool $includePending  When true, returns the row even if pending_at is set.
+     * @param bool $includeDeleted  When true, returns the row even if deleted_at is set.
      */
-    public static function getById(int $id, bool $includePending = false): ?array
+    public static function getById(int $id, bool $includePending = false, bool $includeDeleted = false): ?array
     {
         $pdo  = Db::get();
         $pendingClause = $includePending ? '' : 'AND pending_at IS NULL';
-        $stmt = $pdo->prepare("SELECT * FROM media WHERE id = ? AND deleted_at IS NULL $pendingClause");
+        $deletedClause = $includeDeleted ? '' : 'AND deleted_at IS NULL';
+        $stmt = $pdo->prepare("SELECT * FROM media WHERE id = ? $deletedClause $pendingClause");
         $stmt->execute([$id]);
         $row = $stmt->fetch();
         if (!$row) {

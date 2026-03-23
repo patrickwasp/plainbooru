@@ -35,51 +35,47 @@
     <?php if (empty($deletedMedia)): ?>
       <p class="text-sm text-muted-foreground">No deleted media.</p>
     <?php else: ?>
-      <div class="card shadow-sm overflow-hidden p-0 gap-0">
-        <table class="w-full text-sm">
-          <thead>
-            <tr class="border-b border-border bg-muted/30 text-left">
-              <th class="px-4 py-2 font-medium w-10">#</th>
-              <th class="px-4 py-2 font-medium">Name</th>
-              <th class="px-4 py-2 font-medium">Kind</th>
-              <th class="px-4 py-2 font-medium">Deleted at</th>
-              <th class="px-4 py-2 font-medium">Deleted by</th>
-              <th class="px-4 py-2 font-medium">Actions</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-border">
-            <?php foreach ($deletedMedia as $m): ?>
-              <tr class="hover:bg-muted/20">
-                <td class="px-4 py-2 text-muted-foreground"><?= (int)$m['id'] ?></td>
-                <td class="px-4 py-2 font-mono text-xs truncate max-w-xs"><?= $this->e($m['original_name']) ?></td>
-                <td class="px-4 py-2 text-xs">
-                  <span class="badge-outline"><?= $this->e($m['kind']) ?></span>
-                </td>
-                <td class="px-4 py-2 text-xs text-muted-foreground whitespace-nowrap"><?= $this->e(substr($m['deleted_at'], 0, 16)) ?></td>
-                <td class="px-4 py-2 text-xs">
-                  <?php if (!empty($m['deleted_by_username'])): ?>
-                    <a href="/u/<?= urlencode($m['deleted_by_username']) ?>" class="hover:underline"><?= $this->e($m['deleted_by_username']) ?></a>
-                  <?php else: ?>
-                    <span class="text-muted-foreground italic">unknown</span>
-                  <?php endif; ?>
-                </td>
-                <td class="px-4 py-2">
-                  <div class="flex items-center gap-2">
-                    <form action="/admin/trash/media/<?= (int)$m['id'] ?>/restore" method="post">
-                      <?= $this->csrfInput() ?>
-                      <button type="submit" class="btn-sm-outline text-xs h-7 px-2">Restore</button>
-                    </form>
-                    <form action="/admin/trash/media/<?= (int)$m['id'] ?>/purge" method="post">
-                      <?= $this->csrfInput() ?>
-                      <button type="submit" class="btn-sm-destructive text-xs h-7 px-2"
-                              onclick="return confirm('Permanently delete this media and its files? This cannot be undone.')">Purge</button>
-                    </form>
-                  </div>
-                </td>
-              </tr>
-            <?php endforeach; ?>
-          </tbody>
-        </table>
+      <div class="card shadow-sm overflow-hidden p-0 gap-0 divide-y divide-border">
+        <?php foreach ($deletedMedia as $m): ?>
+          <div class="flex items-center gap-4 px-4 py-3">
+            <!-- Thumbnail -->
+            <a href="/file/<?= (int)$m['id'] ?>" target="_blank" class="shrink-0">
+              <img src="/thumb/<?= (int)$m['id'] ?>" alt=""
+                   class="w-16 h-16 object-cover rounded bg-muted"
+                   loading="lazy">
+            </a>
+            <!-- Info -->
+            <div class="flex-1 min-w-0 text-sm">
+              <div class="flex items-center gap-2 flex-wrap">
+                <span class="text-muted-foreground text-xs">#<?= (int)$m['id'] ?></span>
+                <span class="font-mono text-xs truncate"><?= $this->e($m['original_name']) ?></span>
+                <span class="badge-outline text-xs"><?= $this->e($m['kind']) ?></span>
+                <?php if (!empty($m['size_bytes'])): ?>
+                  <span class="text-xs text-muted-foreground"><?= number_format($m['size_bytes'] / 1048576, 2) ?> MB</span>
+                <?php endif; ?>
+              </div>
+              <div class="text-xs text-muted-foreground mt-0.5">
+                Deleted <?= $this->e(substr($m['deleted_at'], 0, 16)) ?>
+                <?php if (!empty($m['deleted_by_username'])): ?>
+                  by <a href="/u/<?= urlencode($m['deleted_by_username']) ?>" class="hover:underline"><?= $this->e($m['deleted_by_username']) ?></a>
+                <?php endif; ?>
+              </div>
+            </div>
+            <!-- Actions -->
+            <div class="flex items-center gap-2 shrink-0 pr-2">
+              <a href="/file/<?= (int)$m['id'] ?>" download class="btn-sm-outline text-xs h-7 px-2">Download</a>
+              <form action="/admin/trash/media/<?= (int)$m['id'] ?>/restore" method="post">
+                <?= $this->csrfInput() ?>
+                <button type="submit" class="btn-sm-outline text-xs h-7 px-2">Restore</button>
+              </form>
+              <form action="/admin/trash/media/<?= (int)$m['id'] ?>/purge" method="post">
+                <?= $this->csrfInput() ?>
+                <button type="submit" class="btn-sm-destructive text-xs h-7 px-2"
+                        onclick="return confirm('Permanently delete this media and its files?')">Purge</button>
+              </form>
+            </div>
+          </div>
+        <?php endforeach; ?>
       </div>
 
       <?php if ($mediaTotalPages > 1): ?>

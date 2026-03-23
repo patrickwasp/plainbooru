@@ -124,6 +124,12 @@
       </form>
     <?php endif; ?>
   </div>
+  <?php if ($can_moderate && ($media['kind'] ?? '') === 'video'): ?>
+  <form action="/admin/media/<?= $_id ?>/rethumb" method="post" class="mt-2">
+    <?= $this->csrfInput() ?>
+    <button type="submit" class="btn-sm-outline w-full justify-center">Regenerate thumbnail</button>
+  </form>
+  <?php endif; ?>
   <?php $_actions = ob_get_clean(); ?>
 <div class="shrink-0 border-t">
   <?= $this->partial('details_accordion', ['title' => 'Details', 'rows' => $_rows, 'actions' => $_actions, 'upward' => true, 'class' => 'px-5']) ?>

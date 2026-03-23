@@ -535,13 +535,13 @@ final class App
             return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
         });
 
-        // GET /admin/settings
-        $app->get('/admin/settings', function (Request $req, Response $resp) use ($renderer) {
+        // GET /admin/logs
+        $app->get('/admin/logs', function (Request $req, Response $resp) use ($renderer) {
             $user = UserService::current();
             Guard::requireAtLeast('admin', $user);
-            $pdo      = Db::get();
-            $rows     = $pdo->query('SELECT key, value FROM settings')->fetchAll(\PDO::FETCH_KEY_PAIR);
-            $settings = array_merge(Settings::defaults(), $rows);
+
+            $diag = ThumbService::diagnostics();
+
             $iniToBytes = static function (string $v): int {
                 $v = trim($v);
                 $last = strtolower($v[-1] ?? '');
@@ -558,12 +558,41 @@ final class App
                 'upload_max_filesize_bytes' => $iniToBytes(ini_get('upload_max_filesize') ?: '0'),
                 'post_max_size'             => ini_get('post_max_size') ?: '?',
                 'post_max_size_bytes'       => $iniToBytes(ini_get('post_max_size') ?: '0'),
+                'memory_limit'              => ini_get('memory_limit') ?: '?',
+                'max_execution_time'        => ini_get('max_execution_time') ?: '?',
             ];
+
+            // PHP error log
+            $phpErrorLog = ini_get('error_log') ?: null;
+            $phpLogLines = [];
+            if ($phpErrorLog && is_readable($phpErrorLog)) {
+                $all = @file($phpErrorLog, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+                if ($all !== false) {
+                    $phpLogLines = array_slice($all, -100);
+                }
+            }
+
+            $html = $renderer->render('admin/logs', [
+                'title'       => 'Logs & Health – Admin – plainbooru',
+                'diag'        => $diag,
+                'phpLimits'   => $phpLimits,
+                'phpErrorLog' => $phpErrorLog,
+                'phpLogLines' => $phpLogLines,
+            ]);
+            $resp->getBody()->write($html);
+            return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
+        });
+
+        // GET /admin/settings
+        $app->get('/admin/settings', function (Request $req, Response $resp) use ($renderer) {
+            $user = UserService::current();
+            Guard::requireAtLeast('admin', $user);
+            $pdo      = Db::get();
+            $rows     = $pdo->query('SELECT key, value FROM settings')->fetchAll(\PDO::FETCH_KEY_PAIR);
+            $settings = array_merge(Settings::defaults(), $rows);
             $html = $renderer->render('admin/site_settings', [
-                'title'     => 'Site Settings – Admin – plainbooru',
-                'settings'  => $settings,
-                'diag'      => ThumbService::diagnostics(),
-                'phpLimits' => $phpLimits,
+                'title'    => 'Site Settings – Admin – plainbooru',
+                'settings' => $settings,
             ]);
             $resp->getBody()->write($html);
             return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
@@ -1348,7 +1377,7 @@ final class App
 
         // GET /file/{id}
         $app->get('/file/{id:[0-9]+}', function (Request $req, Response $resp, array $args) {
-            $media = MediaService::getById((int)$args['id'], true);
+            $media = MediaService::getById((int)$args['id'], true, true);
             if (!$media) {
                 return $resp->withStatus(404);
             }
@@ -1372,7 +1401,7 @@ final class App
         // GET /thumb/{id}
         $app->get('/thumb/{id:[0-9]+}', function (Request $req, Response $resp, array $args) {
             $id    = (int)$args['id'];
-            $media = MediaService::getById($id, true);
+            $media = MediaService::getById($id, true, true);
             if (!$media) {
                 return $resp->withStatus(404);
             }
@@ -1743,6 +1772,22 @@ final class App
             ModLog::write('tag.queue.reject', 'tagqueue:' . $id, (int)$user['id']);
             Flash::set('success', 'Tag rejected.');
             return $resp->withStatus(302)->withHeader('Location', '/admin/queue?tab=tags');
+        });
+
+        // POST /admin/media/{id}/rethumb – regenerate thumbnail (mods/admins)
+        $app->post('/admin/media/{id:[0-9]+}/rethumb', function (Request $req, Response $resp, array $args) {
+            $user = UserService::current();
+            Guard::requireAtLeast('moderator', $user);
+            $id    = (int)$args['id'];
+            $media = MediaService::getById($id, true);
+            if (!$media) {
+                Flash::set('error', 'Media not found.');
+                return $resp->withStatus(302)->withHeader('Location', '/');
+            }
+            ThumbService::generate($media['stored_name'], $media['mime'], $id, true);
+            Flash::set('success', 'Thumbnail regenerated.');
+            $ref = $req->getServerParams()['HTTP_REFERER'] ?? '/m/' . $id;
+            return $resp->withStatus(302)->withHeader('Location', $ref);
         });
 
         // POST /admin/users/{id}/moderation – toggle requires_moderation flag
