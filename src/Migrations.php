@@ -190,6 +190,36 @@ final class Migrations
         $pdo->exec('CREATE INDEX IF NOT EXISTS idx_pools_creator_id ON pools(creator_id)');
         $pdo->exec('CREATE INDEX IF NOT EXISTS idx_pools_visibility  ON pools(visibility)');
 
+        if (!in_array('pending_at', $cols, true)) {
+            $pdo->exec('ALTER TABLE media ADD COLUMN pending_at TEXT NULL');
+        }
+        if (!in_array('pending_by', $cols, true)) {
+            $pdo->exec('ALTER TABLE media ADD COLUMN pending_by INTEGER NULL REFERENCES users(id)');
+        }
+
+        $commentCols = array_column($pdo->query('PRAGMA table_info(comments)')->fetchAll(), 'name');
+        if (!in_array('pending_at', $commentCols, true)) {
+            $pdo->exec('ALTER TABLE comments ADD COLUMN pending_at TEXT NULL');
+        }
+
+        if (!in_array('requires_moderation', $userCols, true)) {
+            $pdo->exec('ALTER TABLE users ADD COLUMN requires_moderation INTEGER NOT NULL DEFAULT 1');
+            // Only on first add: set existing admins/mods to 0 (new registrations handled by UserService::register)
+            $pdo->exec("UPDATE users SET requires_moderation = 0 WHERE role IN ('admin', 'moderator')");
+        }
+
+        // Tag moderation queue
+        $pdo->exec(<<<'SQL'
+            CREATE TABLE IF NOT EXISTS tag_queue (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                media_id   INTEGER NOT NULL REFERENCES media(id) ON DELETE CASCADE,
+                user_id    INTEGER NULL     REFERENCES users(id) ON DELETE SET NULL,
+                tag        TEXT    NOT NULL,
+                created_at TEXT    NOT NULL
+            )
+        SQL);
+        $pdo->exec('CREATE INDEX IF NOT EXISTS idx_tag_queue_media_id ON tag_queue(media_id)');
+
         // Defensive: clear any stale null roles
         $pdo->exec("UPDATE users SET role = 'user' WHERE role IS NULL");
 

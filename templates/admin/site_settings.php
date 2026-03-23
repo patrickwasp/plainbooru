@@ -129,6 +129,15 @@ $roles = ['user', 'trusted'];
           </div>
         </div>
 
+        <div class="flex items-center gap-3">
+          <input id="moderation_queue" type="checkbox" name="moderation_queue" value="1"
+                 class="checkbox" <?= ($settings['moderation_queue'] ?? '0') === '1' ? 'checked' : '' ?>>
+          <div>
+            <label class="text-sm" for="moderation_queue">Moderation queue</label>
+            <p class="text-xs text-muted-foreground">Uploads, comments, and tag additions from users with the moderation flag require approval before publishing. Moderators and admins are exempt.</p>
+          </div>
+        </div>
+
         <div class="grid gap-3">
           <div class="flex items-center gap-3">
             <input id="maintenance_mode" type="checkbox" name="maintenance_mode" value="1"
@@ -214,15 +223,12 @@ $roles = ['user', 'trusted'];
       <h2 class="text-sm font-semibold">Server Status</h2>
     </div>
     <div class="px-6 py-6 grid gap-3">
-      <?php
-      $checks = [
-          'gd'      => ['label' => 'GD extension',         'ok' => $diag['gd'],      'warn' => 'Image thumbnails will not work.'],
-          'gd_webp' => ['label' => 'GD WebP support',      'ok' => $diag['gd_webp'], 'warn' => 'Thumbnails will be saved as JPEG instead of WebP.'],
-          'ffmpeg'  => ['label' => 'ffmpeg',                'ok' => $diag['ffmpeg'],  'warn' => 'Video thumbnails will be a grey placeholder. Install ffmpeg to generate real frames.'],
-          'ffprobe' => ['label' => 'ffprobe',               'ok' => $diag['ffprobe'], 'warn' => 'Video duration will not be detected.'],
-      ];
-      foreach ($checks as $check):
-      ?>
+
+      <!-- GD -->
+      <?php foreach ([
+          ['label' => 'GD extension',   'ok' => $diag['gd'],      'warn' => 'Image thumbnails will not work.'],
+          ['label' => 'GD WebP support','ok' => $diag['gd_webp'], 'warn' => 'Thumbnails will be saved as JPEG instead of WebP.'],
+      ] as $check): ?>
         <div class="flex items-start gap-3 text-sm">
           <?php if ($check['ok']): ?>
             <span class="text-green-600 font-mono mt-0.5">✓</span>
@@ -231,11 +237,70 @@ $roles = ['user', 'trusted'];
             <span class="text-destructive font-mono mt-0.5">✗</span>
             <div>
               <span class="font-medium"><?= $this->e($check['label']) ?></span>
-              <span class="text-muted-foreground"> — not found. <?= $this->e($check['warn']) ?></span>
+              <span class="text-muted-foreground"> — <?= $this->e($check['warn']) ?></span>
             </div>
           <?php endif; ?>
         </div>
       <?php endforeach; ?>
+
+      <!-- PHP execution functions -->
+      <?php foreach ([
+          ['label' => 'exec()',       'ok' => $diag['exec_enabled'],       'warn' => 'ffmpeg cannot run — exec() is disabled in PHP config.'],
+          ['label' => 'shell_exec()', 'ok' => $diag['shell_exec_enabled'], 'warn' => 'ffmpeg path detection may fail — shell_exec() is disabled.'],
+      ] as $check): ?>
+        <div class="flex items-start gap-3 text-sm">
+          <?php if ($check['ok']): ?>
+            <span class="text-green-600 font-mono mt-0.5">✓</span>
+            <span class="text-muted-foreground"><?= $this->e($check['label']) ?></span>
+          <?php else: ?>
+            <span class="text-destructive font-mono mt-0.5">✗</span>
+            <div>
+              <span class="font-medium"><?= $this->e($check['label']) ?></span>
+              <span class="text-muted-foreground"> — <?= $this->e($check['warn']) ?></span>
+            </div>
+          <?php endif; ?>
+        </div>
+      <?php endforeach; ?>
+
+      <!-- ffmpeg / ffprobe -->
+      <?php foreach ([
+          ['key' => 'ffmpeg',  'label' => 'ffmpeg',  'path' => $diag['ffmpeg_path'],  'version' => $diag['ffmpeg_version'],  'warn' => 'Video thumbnails will be a grey placeholder.'],
+          ['key' => 'ffprobe', 'label' => 'ffprobe', 'path' => $diag['ffprobe_path'], 'version' => $diag['ffprobe_version'], 'warn' => 'Video duration will not be detected.'],
+      ] as $check): ?>
+        <div class="flex items-start gap-3 text-sm">
+          <?php if ($check['version']): ?>
+            <span class="text-green-600 font-mono mt-0.5">✓</span>
+            <div>
+              <span class="text-muted-foreground"><?= $this->e($check['label']) ?></span>
+              <span class="text-xs text-muted-foreground/60 ml-2 font-mono"><?= $this->e($check['path']) ?></span>
+              <p class="text-xs text-muted-foreground/60 font-mono"><?= $this->e($check['version']) ?></p>
+            </div>
+          <?php elseif ($check['path']): ?>
+            <span class="text-yellow-600 font-mono mt-0.5">!</span>
+            <div>
+              <span class="font-medium"><?= $this->e($check['label']) ?></span>
+              <span class="text-muted-foreground"> — found at <code><?= $this->e($check['path']) ?></code> but failed to execute. <?= $this->e($check['warn']) ?></span>
+            </div>
+          <?php else: ?>
+            <span class="text-destructive font-mono mt-0.5">✗</span>
+            <div>
+              <span class="font-medium"><?= $this->e($check['label']) ?></span>
+              <span class="text-muted-foreground"> — not found. Checked <code><?= $this->e($diag['bin_path']) ?></code> and system PATH. <?= $this->e($check['warn']) ?></span>
+            </div>
+          <?php endif; ?>
+        </div>
+      <?php endforeach; ?>
+
+      <?php if ($diag['open_basedir']): ?>
+        <div class="flex items-start gap-3 text-sm">
+          <span class="text-yellow-600 font-mono mt-0.5">!</span>
+          <div>
+            <span class="font-medium">open_basedir</span>
+            <span class="text-muted-foreground"> is set: <code><?= $this->e($diag['open_basedir']) ?></code></span>
+            <p class="text-xs text-muted-foreground mt-0.5">If ffmpeg is outside this path, PHP cannot access it even if the file exists.</p>
+          </div>
+        </div>
+      <?php endif; ?>
 
       <?php
       $configuredBytes = (int)($settings['max_upload_mb'] ?? 50) * 1_048_576;

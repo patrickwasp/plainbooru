@@ -36,6 +36,7 @@ final class Settings
             'maintenance_mode'             => '0',
             'maintenance_message'          => 'Site is under maintenance. Please check back soon.',
             'max_tags_per_media'           => '50',
+            'moderation_queue'             => '0',
         ];
     }
 
@@ -128,7 +129,8 @@ final class Settings
             'anon_can_create_pool',
             'anon_can_edit_tags',
             'require_login_to_view',
-            'maintenance_mode'     => in_array($value, ['0', '1'], true) ? $value : '0',
+            'maintenance_mode',
+            'moderation_queue'     => in_array($value, ['0', '1'], true) ? $value : '0',
             default                => $value,
         };
     }

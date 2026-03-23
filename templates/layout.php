@@ -2,9 +2,9 @@
 $isDark      = ($_COOKIE['theme'] ?? '') === 'dark';
 $sidebarState = $_SESSION['sidebar'] ?? 'auto'; // 'auto' | 'hidden' | 'shown'
 $sidebarAsideClass = match($sidebarState) {
-    'shown'  => 'w-64 shrink-0 border-l border-border flex flex-col overflow-y-auto',
+    'shown'  => 'w-64 shrink-0 border-l border-border flex flex-col',
     'hidden' => 'hidden',
-    default  => 'hidden md:flex w-64 shrink-0 border-l border-border flex-col overflow-y-auto',
+    default  => 'hidden md:flex w-64 shrink-0 border-l border-border flex-col',
 };
 ?>
 <!doctype html>
@@ -33,7 +33,8 @@ $sidebarAsideClass = match($sidebarState) {
           <details class="dropdown">
             <summary class="btn-ghost text-sm px-3 py-1 rounded-md hover:bg-accent cursor-pointer list-none"><?= $this->e($currentUser['username']) ?></summary>
             <ul dir="rtl">
-              <li><a href="/settings/account">My account</a></li>
+              <li><a href="/u/<?= urlencode($currentUser['username']) ?>">Profile</a></li>
+              <li><a href="/settings/account">Account</a></li>
               <?php if (in_array($role, ['moderator', 'admin'], true)): ?>
                 <li><a href="<?= $role === 'admin' ? '/admin/users' : '/admin/mod-log' ?>">Admin</a></li>
               <?php endif; ?>
@@ -95,7 +96,8 @@ $sidebarAsideClass = match($sidebarState) {
         <details class="dropdown">
           <summary class="text-xs px-2 py-1 rounded hover:bg-accent cursor-pointer list-none"><?= $this->e($currentUser['username']) ?></summary>
           <ul dir="rtl">
-            <li><a href="/settings/account">My account</a></li>
+            <li><a href="/u/<?= urlencode($currentUser['username']) ?>">Profile</a></li>
+            <li><a href="/settings/account">Account</a></li>
             <?php if (in_array($role, ['moderator', 'admin'], true)): ?>
               <li><a href="<?= $role === 'admin' ? '/admin/users' : '/admin/mod-log' ?>">Admin</a></li>
             <?php endif; ?>
@@ -140,7 +142,7 @@ $sidebarAsideClass = match($sidebarState) {
   <!-- Content -->
   <?php if (isset($sidebar)): ?>
   <main class="flex-1 min-h-0 flex overflow-hidden">
-    <div class="flex-1 min-w-0 overflow-y-auto px-4 py-6">
+    <div class="<?= $this->e($sidebarContentClass ?? 'flex-1 min-w-0 overflow-y-auto px-4 py-6') ?>">
       <?= $content ?>
     </div>
     <aside class="<?= $sidebarAsideClass ?>">

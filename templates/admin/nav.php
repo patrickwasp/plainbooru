@@ -14,6 +14,7 @@ if ($isAdmin) {
     $links[] = ['href' => '/admin/settings', 'label' => 'Settings',  'key' => 'settings'];
 }
 if ($isMod) {
+    $links[] = ['href' => '/admin/queue',    'label' => 'Queue',     'key' => 'queue'];
     $links[] = ['href' => '/admin/mod-log',  'label' => 'Mod Log',   'key' => 'mod-log'];
     $links[] = ['href' => '/admin/trash',    'label' => 'Trash',     'key' => 'trash'];
 }

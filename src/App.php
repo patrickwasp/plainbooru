@@ -354,6 +354,7 @@ final class App
                     throw new \RuntimeException('Passwords do not match.');
                 }
                 $user = UserService::register($username, $password);
+                ModLog::write('user.register', 'user:' . $user['id'], null, $username);
                 UserService::login($username, $password);
                 return $resp->withStatus(302)->withHeader('Location', '/');
             } catch (\RuntimeException $e) {
@@ -416,6 +417,7 @@ final class App
                     if (!UserService::changePassword((int)$user['id'], $current, $new)) {
                         throw new \RuntimeException('Current password is incorrect.');
                     }
+                    ModLog::write('user.password', 'user:' . (int)$user['id'], (int)$user['id']);
                     Flash::set('success', 'Password updated.');
                     return $resp->withStatus(302)->withHeader('Location', '/settings/account');
                 } catch (\RuntimeException $e) {
@@ -456,6 +458,7 @@ final class App
             $label = trim($body['label'] ?? '');
             try {
                 $raw = TokenService::generate((int)$user['id'], $label);
+                ModLog::write('token.create', 'user:' . (int)$user['id'], (int)$user['id'], $label ?: null);
                 Flash::set('success', 'Token created: ' . $raw);
             } catch (\RuntimeException $e) {
                 Flash::set('error', $e->getMessage());
@@ -471,6 +474,7 @@ final class App
             }
             try {
                 TokenService::revoke((int)$args['id'], (int)$user['id']);
+                ModLog::write('token.revoke', 'user:' . (int)$user['id'], (int)$user['id'], 'token:' . (int)$args['id']);
                 Flash::set('success', 'Token revoked.');
             } catch (\RuntimeException $e) {
                 Flash::set('error', $e->getMessage());
@@ -486,10 +490,12 @@ final class App
                 $resp->getBody()->write($html);
                 return $resp->withStatus(404)->withHeader('Content-Type', 'text/html; charset=utf-8');
             }
-            $params   = $req->getQueryParams();
-            $page     = max(1, (int)($params['page'] ?? 1));
-            $pageSize = Settings::getInt('items_per_page', 20);
-            $uploads  = MediaService::getByUploader((int)$profile['id'], $page, $pageSize);
+            $params      = $req->getQueryParams();
+            $page        = max(1, (int)($params['page'] ?? 1));
+            $pageSize    = Settings::getInt('items_per_page', 20);
+            $viewer      = UserService::current();
+            $isOwn       = $viewer && (int)$viewer['id'] === (int)$profile['id'];
+            $uploads     = MediaService::getByUploader((int)$profile['id'], $page, $pageSize, $isOwn);
             $html = $renderer->render('profile', [
                 'title'      => $profile['username'] . ' – plainbooru',
                 'profile'    => $profile,
@@ -498,6 +504,7 @@ final class App
                 'page'       => $page,
                 'page_size'  => $pageSize,
                 'totalPages' => max(1, (int)ceil($uploads['total'] / max(1, $pageSize))),
+                'is_own'     => $isOwn,
             ]);
             $resp->getBody()->write($html);
             return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
@@ -570,7 +577,7 @@ final class App
 
             $boolKeys = ['registration_enabled','anon_can_upload','anon_can_comment',
                          'anon_can_vote','anon_can_create_pool','anon_can_edit_tags',
-                         'require_login_to_view','maintenance_mode'];
+                         'require_login_to_view','maintenance_mode','moderation_queue'];
 
             foreach (Settings::defaults() as $key => $default) {
                 if (in_array($key, $boolKeys, true)) {
@@ -631,7 +638,9 @@ final class App
                 return $resp->withStatus(400)->withHeader('Content-Type', 'text/html; charset=utf-8');
             }
 
-            $uploaderId = UserService::current()['id'] ?? null;
+            $uploadUser2        = UserService::current();
+            $uploaderId         = $uploadUser2['id'] ?? null;
+            $requiresModeration = Settings::getBool('moderation_queue') && $uploadUser2 && (int)($uploadUser2['requires_moderation'] ?? 1) === 1;
             $errors  = [];
             $lastId  = null;
             foreach ($uploaded as $file) {
@@ -644,8 +653,9 @@ final class App
                     'error'    => UPLOAD_ERR_OK,
                 ];
                 try {
-                    $media  = MediaService::storeFromPath($tmpPath, $phpFile, $params['tags'] ?? '', $uploaderId);
+                    $media  = MediaService::storeFromPath($tmpPath, $phpFile, $params['tags'] ?? '', $uploaderId, $requiresModeration);
                     $lastId = $media['id'];
+                    ModLog::write('media.upload', 'media:' . $media['id'], $uploaderId ? (int)$uploaderId : null, $media['original_name']);
                 } catch (\RuntimeException $e) {
                     $errors[] = ($file->getClientFilename() ?? 'file') . ': ' . $e->getMessage();
                 } finally {
@@ -667,20 +677,26 @@ final class App
 
         // GET /m/{id}
         $app->get('/m/{id:[0-9]+}', function (Request $req, Response $resp, array $args) use ($renderer) {
-            $media = MediaService::getById((int)$args['id']);
+            $currentUser = UserService::current();
+            $mediaId     = (int)$args['id'];
+            // Mods and the uploader can view their own pending items
+            $canSeePending = Policy::canModerate($currentUser);
+            $media = MediaService::getById($mediaId, $canSeePending);
+            // If still null, check if it exists and the current user is the uploader
+            if (!$media) {
+                $raw = MediaService::getById($mediaId, true);
+                if ($raw && $raw['pending_at'] !== null && $currentUser && (int)($raw['uploader_id'] ?? -1) === (int)$currentUser['id']) {
+                    $media = $raw;
+                }
+            }
             if (!$media) {
                 $html = $renderer->render('error', ['title' => 'Not Found', 'message' => 'Media not found.', 'code' => 404]);
                 $resp->getBody()->write($html);
                 return $resp->withStatus(404)->withHeader('Content-Type', 'text/html; charset=utf-8');
             }
-            $currentUser = UserService::current();
-            $mediaId     = (int)$args['id'];
-            $html = $renderer->render('post', [
-                'title'        => 'Post #' . $media['id'] . ' – plainbooru',
+            $postData = [
                 'media'        => $media,
                 'pools'        => PoolService::getPoolsForMedia($mediaId),
-                'bodyClass'    => 'h-full overflow-hidden',
-                'mainClass'    => 'flex-1 min-h-0 flex overflow-hidden',
                 'vote_score'   => VoteService::score($mediaId),
                 'user_vote'    => $currentUser ? VoteService::userVote((int)$currentUser['id'], $mediaId) : null,
                 'fav_count'    => FavoriteService::countForMedia($mediaId),
@@ -690,8 +706,14 @@ final class App
                 'can_edit_tags' => Policy::canEditTags($currentUser),
                 'can_moderate'  => Policy::canModerate($currentUser),
                 'is_owner'      => Policy::isOwner($media['uploader_id'] ?? null, $currentUser),
+                'is_pending'    => $media['pending_at'] !== null,
                 'comments'      => CommentService::getForMedia($mediaId),
-            ]);
+            ];
+            $html = $renderer->render('post', array_merge($postData, [
+                'title'              => 'Post #' . $media['id'] . ' – plainbooru',
+                'sidebar'            => $renderer->partial('sidebar_post_detail', $postData),
+                'sidebarContentClass'=> 'flex-1 min-w-0 overflow-hidden',
+            ]));
             $resp->getBody()->write($html);
             return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
         });
@@ -716,7 +738,14 @@ final class App
                     Flash::set('error', "Tag limit reached ({$maxTags} max).");
                     return $resp->withStatus(302)->withHeader('Location', '/m/' . $id);
                 }
-                MediaService::addTags($media, $tag);
+                $tagModeration = Settings::getBool('moderation_queue') && $user && (int)($user['requires_moderation'] ?? 1) === 1 && !Policy::canModerate($user);
+                if ($tagModeration) {
+                    MediaService::queueTagForMedia($id, (int)$user['id'], $tag);
+                    Flash::set('success', 'Tag submitted for moderation.');
+                } else {
+                    MediaService::addTags($media, $tag);
+                    ModLog::write('media.tag.add', 'media:' . $id, $user ? (int)$user['id'] : null, $tag);
+                }
             }
             return $resp->withStatus(302)->withHeader('Location', '/m/' . $id);
         });
@@ -732,6 +761,7 @@ final class App
             $tag  = trim($body['tag'] ?? '');
             if ($tag !== '') {
                 MediaService::removeTag($id, $tag);
+                ModLog::write('media.tag.remove', 'media:' . $id, $user ? (int)$user['id'] : null, $tag);
             }
             return $resp->withStatus(302)->withHeader('Location', '/m/' . $id);
         });
@@ -742,7 +772,8 @@ final class App
             if (!$user) {
                 return $resp->withStatus(302)->withHeader('Location', '/login?next=/m/' . $args['id']);
             }
-            FavoriteService::toggle((int)$user['id'], (int)$args['id']);
+            $added = FavoriteService::toggle((int)$user['id'], (int)$args['id']);
+            ModLog::write($added ? 'favorite.add' : 'favorite.remove', 'media:' . (int)$args['id'], (int)$user['id']);
             return $resp->withStatus(302)->withHeader('Location', '/m/' . $args['id']);
         });
 
@@ -757,6 +788,7 @@ final class App
             $value = (int)($body['value'] ?? 0);
             if ($value === 1 || $value === -1) {
                 VoteService::cast((int)$user['id'], (int)$args['id'], $value);
+                ModLog::write('vote.cast', 'media:' . (int)$args['id'], (int)$user['id'], $value === 1 ? '+1' : '-1');
             }
             return $resp->withStatus(302)->withHeader('Location', '/m/' . $args['id']);
         });
@@ -776,8 +808,14 @@ final class App
                 return $resp->withStatus(302)->withHeader('Location', '/m/' . $mediaId . '#comments');
             }
             $body = (array)($req->getParsedBody() ?? []);
+            $commentModeration = Settings::getBool('moderation_queue') && $user && (int)($user['requires_moderation'] ?? 1) === 1 && !Policy::canModerate($user);
             try {
-                CommentService::add($mediaId, $user ? (int)$user['id'] : null, $body['body'] ?? '');
+                $comment = CommentService::add($mediaId, $user ? (int)$user['id'] : null, $body['body'] ?? '', $commentModeration);
+                if ($commentModeration) {
+                    Flash::set('success', 'Comment submitted and awaiting moderation.');
+                } else {
+                    ModLog::write('comment.add', 'media:' . $mediaId, $user ? (int)$user['id'] : null, 'comment:' . $comment['id']);
+                }
             } catch (\RuntimeException $e) {
                 Flash::set('error', $e->getMessage());
             }
@@ -962,6 +1000,7 @@ final class App
             $visibility = $params['visibility'] ?? 'public';
             try {
                 $pool = PoolService::create($name, $desc, $viewer ? (int)$viewer['id'] : null, $visibility);
+                ModLog::write('pool.create', 'pool:' . $pool['id'], $viewer ? (int)$viewer['id'] : null, $name);
                 return $resp->withStatus(302)->withHeader('Location', '/pools/' . $pool['id'] . '/edit');
             } catch (\RuntimeException $e) {
                 $data    = PoolService::getList(1, 18, $viewer ? (int)$viewer['id'] : null, $viewer['role'] ?? 'anonymous');
@@ -1047,6 +1086,7 @@ final class App
             $tag    = trim($params['tag'] ?? '');
             if ($tag !== '') {
                 PoolService::addTag($poolId, $tag);
+                ModLog::write('pool.tag.add', 'pool:' . $poolId, $viewer ? (int)$viewer['id'] : null, $tag);
             }
             $return = $params['return'] ?? '/pools/' . $poolId . '/edit';
             if (!str_starts_with($return, '/') || str_starts_with($return, '//')) {
@@ -1067,6 +1107,7 @@ final class App
             $tag    = trim($params['tag'] ?? '');
             if ($tag !== '') {
                 PoolService::removeTag($poolId, $tag);
+                ModLog::write('pool.tag.remove', 'pool:' . $poolId, $viewer ? (int)$viewer['id'] : null, $tag);
             }
             return $resp->withStatus(302)->withHeader('Location', '/pools/' . $poolId . '/edit');
         });
@@ -1114,6 +1155,8 @@ final class App
                 try {
                     $media = MediaService::storeFromPath($tmpPath, $phpFile, $params['tags'] ?? '', $poolUploaderId);
                     PoolService::addItem($poolId, (int)$media['id']);
+                    ModLog::write('media.upload', 'media:' . $media['id'], $poolUploaderId ? (int)$poolUploaderId : null, $media['original_name']);
+                    ModLog::write('pool.item.add', 'pool:' . $poolId . '/media:' . $media['id'], $poolUploaderId ? (int)$poolUploaderId : null);
                 } catch (\RuntimeException $e) {
                     $errors[] = ($file->getClientFilename() ?? 'file') . ': ' . $e->getMessage();
                 } finally {
@@ -1142,6 +1185,7 @@ final class App
             if (!$pool || !PoolService::canEdit($pool, $viewer ? (int)$viewer['id'] : null, $viewer['role'] ?? 'anonymous')) {
                 return $resp->withStatus(403);
             }
+            ModLog::write('pool.delete', 'pool:' . (int)$args['id'], $viewer ? (int)$viewer['id'] : null, $pool['name'] ?? null);
             PoolService::delete((int)$args['id'], $viewer ? (int)$viewer['id'] : null);
             return $resp->withStatus(302)->withHeader('Location', '/pools');
         });
@@ -1223,6 +1267,7 @@ final class App
             $pos     = isset($params['position']) && $params['position'] !== '' ? (int)$params['position'] : null;
             try {
                 PoolService::addItem($poolId, $mediaId, $pos);
+                ModLog::write('pool.item.add', 'pool:' . $poolId . '/media:' . $mediaId, $viewer ? (int)$viewer['id'] : null);
             } catch (\RuntimeException $e) {
                 $pool = PoolService::getById($poolId);
                 $html = $renderer->render('pool_edit', ['title' => ($pool['name'] ?? 'Pool') . ' – plainbooru', 'pool' => $pool, 'error' => $e->getMessage()]);
@@ -1295,6 +1340,7 @@ final class App
             $params  = $req->getParsedBody();
             $mediaId = (int)($params['media_id'] ?? 0);
             PoolService::removeItem($poolId, $mediaId);
+            ModLog::write('pool.item.remove', 'pool:' . $poolId . '/media:' . $mediaId, $viewer ? (int)$viewer['id'] : null);
             return $resp->withStatus(302)->withHeader('Location', '/pools/' . $poolId . '/edit#items');
         });
 
@@ -1302,7 +1348,7 @@ final class App
 
         // GET /file/{id}
         $app->get('/file/{id:[0-9]+}', function (Request $req, Response $resp, array $args) {
-            $media = MediaService::getById((int)$args['id']);
+            $media = MediaService::getById((int)$args['id'], true);
             if (!$media) {
                 return $resp->withStatus(404);
             }
@@ -1326,7 +1372,7 @@ final class App
         // GET /thumb/{id}
         $app->get('/thumb/{id:[0-9]+}', function (Request $req, Response $resp, array $args) {
             $id    = (int)$args['id'];
-            $media = MediaService::getById($id);
+            $media = MediaService::getById($id, true);
             if (!$media) {
                 return $resp->withStatus(404);
             }
@@ -1508,11 +1554,48 @@ final class App
             $user = UserService::current();
             Guard::requireAtLeast('admin', $user);
             $pdo   = Db::get();
-            $users = $pdo->query('SELECT id, username, role, created_at, banned_at FROM users ORDER BY id ASC')->fetchAll();
+            $users = $pdo->query('SELECT id, username, role, created_at, banned_at, requires_moderation FROM users ORDER BY id ASC')->fetchAll();
             $html  = $renderer->render('admin/users', [
                 'title'       => 'Users – Admin – plainbooru',
                 'users'       => $users,
                 'currentUser' => $user,
+            ]);
+            $resp->getBody()->write($html);
+            return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
+        });
+
+        // GET /admin/users/{id}
+        $app->get('/admin/users/{id:[0-9]+}', function (Request $req, Response $resp, array $args) use ($renderer) {
+            $admin  = UserService::current();
+            Guard::requireAtLeast('admin', $admin);
+            $pdo    = Db::get();
+            $target = $pdo->prepare('SELECT id, username, role, created_at, banned_at, ban_reason, requires_moderation FROM users WHERE id = ?');
+            $target->execute([(int)$args['id']]);
+            $target = $target->fetch();
+            if (!$target) {
+                return $resp->withStatus(404);
+            }
+            $media = $pdo->prepare(
+                'SELECT id, kind, mime, original_name, size_bytes, created_at FROM media
+                  WHERE uploader_id = ? AND deleted_at IS NULL
+                  ORDER BY created_at DESC LIMIT 100'
+            );
+            $media->execute([(int)$args['id']]);
+            $uploads = $media->fetchAll();
+
+            $log = $pdo->prepare(
+                'SELECT action, target, details, created_at FROM mod_log
+                  WHERE mod_id = ? ORDER BY created_at DESC LIMIT 200'
+            );
+            $log->execute([(int)$args['id']]);
+            $logEntries = $log->fetchAll();
+
+            $html = $renderer->render('admin/user_detail', [
+                'title'       => $target['username'] . ' – Admin – plainbooru',
+                'target'      => $target,
+                'uploads'     => $uploads,
+                'logEntries'  => $logEntries,
+                'currentUser' => $admin,
             ]);
             $resp->getBody()->write($html);
             return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
@@ -1546,6 +1629,133 @@ final class App
                 Flash::set('error', $e->getMessage());
             }
             return $resp->withStatus(302)->withHeader('Location', '/admin/users');
+        });
+
+        // GET /admin/queue
+        $app->get('/admin/queue', function (Request $req, Response $resp) use ($renderer) {
+            $user = UserService::current();
+            Guard::requireAtLeast('moderator', $user);
+            $params   = $req->getQueryParams();
+            $tab      = $params['tab'] ?? 'media';
+            $page     = max(1, (int)($params['page'] ?? 1));
+            $pageSize = 20;
+
+            $pendingMedia    = ['total' => 0, 'results' => []];
+            $pendingComments = ['total' => 0, 'results' => []];
+            $pendingTags     = ['total' => 0, 'results' => []];
+
+            if ($tab === 'media') {
+                $pendingMedia = MediaService::getPending($page, $pageSize);
+            } elseif ($tab === 'comments') {
+                $pendingComments = CommentService::getPending($page, $pageSize);
+            } else {
+                $pendingTags = MediaService::getPendingTags($page, $pageSize);
+            }
+
+            $html = $renderer->render('admin/queue', [
+                'title'           => 'Queue – Admin – plainbooru',
+                'tab'             => $tab,
+                'page'            => $page,
+                'page_size'       => $pageSize,
+                'pendingMedia'    => $pendingMedia,
+                'pendingComments' => $pendingComments,
+                'pendingTags'     => $pendingTags,
+            ]);
+            $resp->getBody()->write($html);
+            return $resp->withHeader('Content-Type', 'text/html; charset=utf-8');
+        });
+
+        // POST /admin/queue/media/{id}/approve
+        $app->post('/admin/queue/media/{id:[0-9]+}/approve', function (Request $req, Response $resp, array $args) {
+            $user = UserService::current();
+            Guard::requireAtLeast('moderator', $user);
+            $id = (int)$args['id'];
+            if (MediaService::approvePending($id)) {
+                ModLog::write('media.approve', 'media:' . $id, (int)$user['id']);
+                Flash::set('success', 'Media approved.');
+            } else {
+                Flash::set('error', 'Not found or already approved.');
+            }
+            return $resp->withStatus(302)->withHeader('Location', '/admin/queue?tab=media');
+        });
+
+        // POST /admin/queue/media/{id}/reject
+        $app->post('/admin/queue/media/{id:[0-9]+}/reject', function (Request $req, Response $resp, array $args) {
+            $user = UserService::current();
+            Guard::requireAtLeast('moderator', $user);
+            $id = (int)$args['id'];
+            if (MediaService::rejectPending($id)) {
+                ModLog::write('media.reject', 'media:' . $id, (int)$user['id']);
+                Flash::set('success', 'Media rejected and deleted.');
+            } else {
+                Flash::set('error', 'Not found or already reviewed.');
+            }
+            return $resp->withStatus(302)->withHeader('Location', '/admin/queue?tab=media');
+        });
+
+        // POST /admin/queue/comments/{id}/approve
+        $app->post('/admin/queue/comments/{id:[0-9]+}/approve', function (Request $req, Response $resp, array $args) {
+            $user = UserService::current();
+            Guard::requireAtLeast('moderator', $user);
+            $id = (int)$args['id'];
+            if (CommentService::approvePending($id)) {
+                ModLog::write('comment.approve', 'comment:' . $id, (int)$user['id']);
+                Flash::set('success', 'Comment approved.');
+            } else {
+                Flash::set('error', 'Not found or already approved.');
+            }
+            return $resp->withStatus(302)->withHeader('Location', '/admin/queue?tab=comments');
+        });
+
+        // POST /admin/queue/comments/{id}/reject
+        $app->post('/admin/queue/comments/{id:[0-9]+}/reject', function (Request $req, Response $resp, array $args) {
+            $user = UserService::current();
+            Guard::requireAtLeast('moderator', $user);
+            $id = (int)$args['id'];
+            $comment = CommentService::getById($id);
+            if ($comment && $comment['pending_at'] !== null) {
+                CommentService::permanentDelete($id);
+                ModLog::write('comment.reject', 'comment:' . $id, (int)$user['id']);
+                Flash::set('success', 'Comment rejected.');
+            } else {
+                Flash::set('error', 'Not found or already reviewed.');
+            }
+            return $resp->withStatus(302)->withHeader('Location', '/admin/queue?tab=comments');
+        });
+
+        // POST /admin/queue/tags/{id}/approve
+        $app->post('/admin/queue/tags/{id:[0-9]+}/approve', function (Request $req, Response $resp, array $args) {
+            $user = UserService::current();
+            Guard::requireAtLeast('moderator', $user);
+            $id = (int)$args['id'];
+            MediaService::approveTagQueue($id);
+            ModLog::write('tag.queue.approve', 'tagqueue:' . $id, (int)$user['id']);
+            Flash::set('success', 'Tag approved.');
+            return $resp->withStatus(302)->withHeader('Location', '/admin/queue?tab=tags');
+        });
+
+        // POST /admin/queue/tags/{id}/reject
+        $app->post('/admin/queue/tags/{id:[0-9]+}/reject', function (Request $req, Response $resp, array $args) {
+            $user = UserService::current();
+            Guard::requireAtLeast('moderator', $user);
+            $id = (int)$args['id'];
+            MediaService::rejectTagQueue($id);
+            ModLog::write('tag.queue.reject', 'tagqueue:' . $id, (int)$user['id']);
+            Flash::set('success', 'Tag rejected.');
+            return $resp->withStatus(302)->withHeader('Location', '/admin/queue?tab=tags');
+        });
+
+        // POST /admin/users/{id}/moderation – toggle requires_moderation flag
+        $app->post('/admin/users/{id:[0-9]+}/moderation', function (Request $req, Response $resp, array $args) {
+            $actor = UserService::current();
+            Guard::requireAtLeast('moderator', $actor);
+            $body    = (array)($req->getParsedBody() ?? []);
+            $enabled = isset($body['enabled']) && $body['enabled'] === '1';
+            $userId  = (int)$args['id'];
+            UserService::setRequiresModeration($userId, $enabled);
+            ModLog::write('user.moderation', 'user:' . $userId, (int)$actor['id'], $enabled ? 'enabled' : 'disabled');
+            Flash::set('success', 'Moderation flag updated.');
+            return $resp->withStatus(302)->withHeader('Location', '/admin/users/' . $userId);
         });
 
         // GET /admin/mod-log

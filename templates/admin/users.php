@@ -33,7 +33,7 @@ $roles = ['user', 'trusted', 'moderator', 'admin'];
           <tr class="<?= $isBanned ? 'opacity-50' : '' ?>">
             <td class="px-4 py-3 text-muted-foreground"><?= (int)$u['id'] ?></td>
             <td class="px-4 py-3 font-medium">
-              <?= $this->e($u['username']) ?>
+              <a href="/admin/users/<?= (int)$u['id'] ?>" class="hover:underline"><?= $this->e($u['username']) ?></a>
               <?php if ($isSelf): ?>
                 <span class="text-xs text-muted-foreground">(you)</span>
               <?php endif; ?>

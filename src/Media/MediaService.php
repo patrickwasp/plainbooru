@@ -13,7 +13,7 @@ final class MediaService
     /**
      * Store a file that's already been moved to $tmpPath (after PSR-7 moveTo).
      */
-    public static function storeFromPath(string $tmpPath, array $fileInfo, string $tags = '', ?int $uploaderId = null): array
+    public static function storeFromPath(string $tmpPath, array $fileInfo, string $tags = '', ?int $uploaderId = null, bool $requiresModeration = false): array
     {
         $size = filesize($tmpPath);
         if ($size === false || $size === 0) {
@@ -69,21 +69,30 @@ final class MediaService
             $duration = self::extractDuration($destPath);
         }
 
-        $animated = ($kind === 'image' && $ext === 'gif' && self::isAnimatedGif($destPath)) ? 1 : 0;
+        $animated  = ($kind === 'image' && $ext === 'gif' && self::isAnimatedGif($destPath)) ? 1 : 0;
+        $pendingAt = $requiresModeration ? gmdate('Y-m-d\TH:i:s\Z') : null;
 
         $now  = date('c');
         $stmt = $pdo->prepare(<<<'SQL'
             INSERT INTO media (kind, sha256, original_name, stored_name, mime, ext, size_bytes,
-                               width, height, duration_seconds, animated, uploader_id, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                               width, height, duration_seconds, animated, uploader_id, created_at,
+                               pending_at, pending_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         SQL);
         $stmt->execute([$kind, $sha256, $origName, $storedName, $mime, $ext, $size,
-                        $width, $height, $duration, $animated, $uploaderId, $now]);
+                        $width, $height, $duration, $animated, $uploaderId, $now,
+                        $pendingAt, $requiresModeration ? $uploaderId : null]);
         $id = (int)$pdo->lastInsertId();
 
         ThumbService::generate($storedName, $mime, $id);
 
         $row = $pdo->query("SELECT * FROM media WHERE id = $id")->fetch();
+        if ($requiresModeration) {
+            // Queue tags for approval rather than applying immediately
+            self::queueTags($id, $uploaderId, $tags);
+            $row['tags'] = self::getTags($id);
+            return $row;
+        }
         return self::addTags($row, $tags);
     }
 
@@ -92,7 +101,7 @@ final class MediaService
      * Returns the media row array.
      * @throws \RuntimeException on validation failure
      */
-    public static function store(array $uploadedFile, string $tags = '', ?int $uploaderId = null): array
+    public static function store(array $uploadedFile, string $tags = '', ?int $uploaderId = null, bool $requiresModeration = false): array
     {
         // Validate size
         $size = $uploadedFile['size'] ?? 0;
@@ -158,29 +167,42 @@ final class MediaService
             $duration = self::extractDuration($destPath);
         }
 
-        $animated = ($kind === 'image' && $ext === 'gif' && self::isAnimatedGif($destPath)) ? 1 : 0;
+        $animated  = ($kind === 'image' && $ext === 'gif' && self::isAnimatedGif($destPath)) ? 1 : 0;
+        $pendingAt = $requiresModeration ? gmdate('Y-m-d\TH:i:s\Z') : null;
 
         $now = date('c');
         $stmt = $pdo->prepare(<<<'SQL'
             INSERT INTO media (kind, sha256, original_name, stored_name, mime, ext, size_bytes,
-                               width, height, duration_seconds, animated, uploader_id, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                               width, height, duration_seconds, animated, uploader_id, created_at,
+                               pending_at, pending_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         SQL);
         $stmt->execute([$kind, $sha256, $origName, $storedName, $mime, $ext, $size,
-                        $width, $height, $duration, $animated, $uploaderId, $now]);
+                        $width, $height, $duration, $animated, $uploaderId, $now,
+                        $pendingAt, $requiresModeration ? $uploaderId : null]);
         $id = (int)$pdo->lastInsertId();
 
         // Generate thumbnail
         ThumbService::generate($storedName, $mime, $id);
 
         $row = $pdo->query("SELECT * FROM media WHERE id = $id")->fetch();
+        if ($requiresModeration) {
+            self::queueTags($id, $uploaderId, $tags);
+            $row['tags'] = self::getTags($id);
+            return $row;
+        }
         return self::addTags($row, $tags);
     }
 
-    public static function getById(int $id): ?array
+    /**
+     * @param bool $includePending  When true, returns the row even if pending_at is set
+     *                              (used by moderators and the uploader viewing their own post).
+     */
+    public static function getById(int $id, bool $includePending = false): ?array
     {
         $pdo  = Db::get();
-        $stmt = $pdo->prepare('SELECT * FROM media WHERE id = ? AND deleted_at IS NULL');
+        $pendingClause = $includePending ? '' : 'AND pending_at IS NULL';
+        $stmt = $pdo->prepare("SELECT * FROM media WHERE id = ? AND deleted_at IS NULL $pendingClause");
         $stmt->execute([$id]);
         $row = $stmt->fetch();
         if (!$row) {
@@ -194,19 +216,20 @@ final class MediaService
     {
         $pdo    = Db::get();
         $offset = ($page - 1) * $pageSize;
-        $rows   = $pdo->query("SELECT * FROM media WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT $pageSize OFFSET $offset")->fetchAll();
-        $total  = (int)$pdo->query('SELECT COUNT(*) FROM media WHERE deleted_at IS NULL')->fetchColumn();
+        $rows   = $pdo->query("SELECT * FROM media WHERE deleted_at IS NULL AND pending_at IS NULL ORDER BY created_at DESC LIMIT $pageSize OFFSET $offset")->fetchAll();
+        $total  = (int)$pdo->query('SELECT COUNT(*) FROM media WHERE deleted_at IS NULL AND pending_at IS NULL')->fetchColumn();
         return ['total' => $total, 'results' => $rows];
     }
 
-    public static function getByUploader(int $userId, int $page = 1, int $pageSize = 20): array
+    public static function getByUploader(int $userId, int $page = 1, int $pageSize = 20, bool $includePending = false): array
     {
         $pdo    = Db::get();
         $offset = ($page - 1) * $pageSize;
-        $stmt   = $pdo->prepare('SELECT * FROM media WHERE uploader_id = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT ? OFFSET ?');
+        $pendingClause = $includePending ? '' : 'AND pending_at IS NULL';
+        $stmt   = $pdo->prepare("SELECT * FROM media WHERE uploader_id = ? AND deleted_at IS NULL $pendingClause ORDER BY pending_at IS NULL ASC, created_at DESC LIMIT ? OFFSET ?");
         $stmt->execute([$userId, $pageSize, $offset]);
         $rows   = $stmt->fetchAll();
-        $cstmt  = $pdo->prepare('SELECT COUNT(*) FROM media WHERE uploader_id = ? AND deleted_at IS NULL');
+        $cstmt  = $pdo->prepare("SELECT COUNT(*) FROM media WHERE uploader_id = ? AND deleted_at IS NULL $pendingClause");
         $cstmt->execute([$userId]);
         $total  = (int)$cstmt->fetchColumn();
         return ['total' => $total, 'results' => $rows];
@@ -223,7 +246,7 @@ final class MediaService
         $union    = $parsed['union'];
 
         $params = [];
-        $where  = ['1=1', 'm.deleted_at IS NULL'];
+        $where  = ['1=1', 'm.deleted_at IS NULL', 'm.pending_at IS NULL'];
 
         // Required: each token must match (AND). Virtual tags become direct SQL; real tags use subquery.
         foreach ($required as $i => $token) {
@@ -477,7 +500,7 @@ final class MediaService
             LEFT JOIN (
                 SELECT mt2.tag_id, mt2.media_id
                 FROM media_tags mt2
-                JOIN media m ON m.id = mt2.media_id AND m.deleted_at IS NULL
+                JOIN media m ON m.id = mt2.media_id AND m.deleted_at IS NULL AND m.pending_at IS NULL
             ) mt ON mt.tag_id = t.id
             WHERE t.deleted_at IS NULL
             GROUP BY t.id
@@ -522,6 +545,119 @@ final class MediaService
         }
         return true;
     }
+
+    // ── Moderation queue ──────────────────────────────────────────────────────
+
+    public static function getPending(int $page = 1, int $pageSize = 20): array
+    {
+        $pdo    = Db::get();
+        $offset = ($page - 1) * $pageSize;
+        $stmt   = $pdo->prepare(<<<'SQL'
+            SELECT m.*, u.username AS uploader_username
+            FROM media m
+            LEFT JOIN users u ON u.id = m.uploader_id
+            WHERE m.pending_at IS NOT NULL AND m.deleted_at IS NULL
+            ORDER BY m.pending_at ASC
+            LIMIT ? OFFSET ?
+        SQL);
+        $stmt->execute([$pageSize, $offset]);
+        $rows  = $stmt->fetchAll();
+        $total = (int)$pdo->query('SELECT COUNT(*) FROM media WHERE pending_at IS NOT NULL AND deleted_at IS NULL')->fetchColumn();
+        return ['total' => $total, 'results' => $rows];
+    }
+
+    public static function approvePending(int $id): bool
+    {
+        $pdo  = Db::get();
+        $stmt = $pdo->prepare('UPDATE media SET pending_at = NULL, pending_by = NULL WHERE id = ? AND pending_at IS NOT NULL');
+        $stmt->execute([$id]);
+        if ($stmt->rowCount() === 0) {
+            return false;
+        }
+        // Apply any queued tags
+        $tagStmt = $pdo->prepare('SELECT tag FROM tag_queue WHERE media_id = ?');
+        $tagStmt->execute([$id]);
+        $row = $pdo->prepare('SELECT * FROM media WHERE id = ?');
+        $row->execute([$id]);
+        $media = $row->fetch();
+        foreach ($tagStmt->fetchAll(\PDO::FETCH_COLUMN) as $tag) {
+            self::addTags($media, $tag);
+        }
+        $pdo->prepare('DELETE FROM tag_queue WHERE media_id = ?')->execute([$id]);
+        return true;
+    }
+
+    public static function rejectPending(int $id): bool
+    {
+        $pdo  = Db::get();
+        $stmt = $pdo->prepare('SELECT * FROM media WHERE id = ? AND pending_at IS NOT NULL');
+        $stmt->execute([$id]);
+        $row  = $stmt->fetch();
+        if (!$row) {
+            return false;
+        }
+        // Delete file, thumb, and DB row
+        $pdo->prepare('DELETE FROM tag_queue WHERE media_id = ?')->execute([$id]);
+        $pdo->prepare('DELETE FROM media WHERE id = ?')->execute([$id]);
+        $upload   = Config::uploadsPath() . '/' . $row['stored_name'];
+        $thumbDir = Config::thumbsPath();
+        foreach ([$upload, "$thumbDir/$id.webp", "$thumbDir/$id.jpg"] as $f) {
+            if (file_exists($f)) {
+                @unlink($f);
+            }
+        }
+        return true;
+    }
+
+    public static function getPendingTagsForMedia(int $mediaId): array
+    {
+        $stmt = Db::get()->prepare('SELECT id, tag, user_id, created_at FROM tag_queue WHERE media_id = ? ORDER BY created_at ASC');
+        $stmt->execute([$mediaId]);
+        return $stmt->fetchAll();
+    }
+
+    public static function approveTagQueue(int $queueId): void
+    {
+        $pdo  = Db::get();
+        $stmt = $pdo->prepare('SELECT * FROM tag_queue WHERE id = ?');
+        $stmt->execute([$queueId]);
+        $item = $stmt->fetch();
+        if (!$item) {
+            return;
+        }
+        $row = $pdo->prepare('SELECT * FROM media WHERE id = ?');
+        $row->execute([$item['media_id']]);
+        $media = $row->fetch();
+        if ($media) {
+            self::addTags($media, $item['tag']);
+        }
+        $pdo->prepare('DELETE FROM tag_queue WHERE id = ?')->execute([$queueId]);
+    }
+
+    public static function rejectTagQueue(int $queueId): void
+    {
+        Db::get()->prepare('DELETE FROM tag_queue WHERE id = ?')->execute([$queueId]);
+    }
+
+    public static function getPendingTags(int $page = 1, int $pageSize = 50): array
+    {
+        $pdo    = Db::get();
+        $offset = ($page - 1) * $pageSize;
+        $stmt   = $pdo->prepare(<<<'SQL'
+            SELECT tq.*, m.original_name, u.username AS submitter_username
+            FROM tag_queue tq
+            JOIN media m ON m.id = tq.media_id
+            LEFT JOIN users u ON u.id = tq.user_id
+            ORDER BY tq.created_at ASC
+            LIMIT ? OFFSET ?
+        SQL);
+        $stmt->execute([$pageSize, $offset]);
+        $rows  = $stmt->fetchAll();
+        $total = (int)$pdo->query('SELECT COUNT(*) FROM tag_queue')->fetchColumn();
+        return ['total' => $total, 'results' => $rows];
+    }
+
+    // ── End moderation queue ──────────────────────────────────────────────────
 
     public static function getDeleted(int $page = 1, int $pageSize = 20): array
     {
@@ -604,7 +740,7 @@ final class MediaService
             SELECT t.name, COUNT(mt.media_id) AS count
             FROM tags t
             JOIN media_tags mt ON mt.tag_id = t.id
-            JOIN media m ON m.id = mt.media_id AND m.deleted_at IS NULL
+            JOIN media m ON m.id = mt.media_id AND m.deleted_at IS NULL AND m.pending_at IS NULL
             WHERE t.deleted_at IS NULL
             GROUP BY t.id
             ORDER BY count DESC
@@ -635,6 +771,30 @@ final class MediaService
     }
 
     // ---- Helpers ----
+
+    public static function queueTagForMedia(int $mediaId, ?int $userId, string $tag): void
+    {
+        $normalized = self::parseTags($tag)[0] ?? '';
+        if ($normalized === '') {
+            return;
+        }
+        Db::get()->prepare('INSERT INTO tag_queue (media_id, user_id, tag, created_at) VALUES (?, ?, ?, ?)')
+            ->execute([$mediaId, $userId, $normalized, gmdate('Y-m-d\TH:i:s\Z')]);
+    }
+
+    private static function queueTags(int $mediaId, ?int $userId, string $tags): void
+    {
+        $tagList = self::parseTags($tags);
+        if (!$tagList) {
+            return;
+        }
+        $pdo  = Db::get();
+        $stmt = $pdo->prepare('INSERT INTO tag_queue (media_id, user_id, tag, created_at) VALUES (?, ?, ?, ?)');
+        $now  = gmdate('Y-m-d\TH:i:s\Z');
+        foreach ($tagList as $tag) {
+            $stmt->execute([$mediaId, $userId, $tag, $now]);
+        }
+    }
 
     public static function addTags(array $row, string $tags): array
     {

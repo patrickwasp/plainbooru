@@ -10,7 +10,7 @@ final class CommentService
 {
     private const MAX_BODY_LENGTH = 2000;
 
-    public static function add(int $mediaId, ?int $userId, string $body): array
+    public static function add(int $mediaId, ?int $userId, string $body, bool $requiresModeration = false): array
     {
         $body = trim($body);
         if ($body === '') {
@@ -20,28 +20,55 @@ final class CommentService
             throw new \RuntimeException('Comment is too long (max ' . self::MAX_BODY_LENGTH . ' characters).');
         }
 
-        $pdo = Db::get();
-        $now = gmdate('Y-m-d\TH:i:s\Z');
+        $pdo       = Db::get();
+        $now       = gmdate('Y-m-d\TH:i:s\Z');
+        $pendingAt = $requiresModeration ? $now : null;
         $pdo->prepare(
-            'INSERT INTO comments (media_id, user_id, body, created_at) VALUES (?, ?, ?, ?)'
-        )->execute([$mediaId, $userId, $body, $now]);
+            'INSERT INTO comments (media_id, user_id, body, created_at, pending_at) VALUES (?, ?, ?, ?, ?)'
+        )->execute([$mediaId, $userId, $body, $now, $pendingAt]);
 
         $id = (int)$pdo->lastInsertId();
         return self::getById($id);
     }
 
-    /** Returns all non-deleted comments for a media item, oldest first. */
+    /** Returns all non-deleted, non-pending comments for a media item, oldest first. */
     public static function getForMedia(int $mediaId): array
     {
         $stmt = Db::get()->prepare(
             'SELECT c.*, u.username
              FROM comments c
              LEFT JOIN users u ON u.id = c.user_id
-             WHERE c.media_id = ? AND c.deleted_at IS NULL
+             WHERE c.media_id = ? AND c.deleted_at IS NULL AND c.pending_at IS NULL
              ORDER BY c.created_at ASC'
         );
         $stmt->execute([$mediaId]);
         return $stmt->fetchAll();
+    }
+
+    public static function getPending(int $page = 1, int $pageSize = 20): array
+    {
+        $pdo    = Db::get();
+        $offset = ($page - 1) * $pageSize;
+        $stmt   = $pdo->prepare(<<<'SQL'
+            SELECT c.*, u.username, m.original_name AS media_name
+            FROM comments c
+            LEFT JOIN users u ON u.id = c.user_id
+            JOIN media m ON m.id = c.media_id
+            WHERE c.pending_at IS NOT NULL AND c.deleted_at IS NULL
+            ORDER BY c.pending_at ASC
+            LIMIT ? OFFSET ?
+        SQL);
+        $stmt->execute([$pageSize, $offset]);
+        $rows  = $stmt->fetchAll();
+        $total = (int)$pdo->query('SELECT COUNT(*) FROM comments WHERE pending_at IS NOT NULL AND deleted_at IS NULL')->fetchColumn();
+        return ['total' => $total, 'results' => $rows];
+    }
+
+    public static function approvePending(int $id): bool
+    {
+        $stmt = Db::get()->prepare('UPDATE comments SET pending_at = NULL WHERE id = ? AND pending_at IS NOT NULL');
+        $stmt->execute([$id]);
+        return $stmt->rowCount() > 0;
     }
 
     /**

@@ -28,15 +28,16 @@ final class UserService
             throw new \RuntimeException('Registration is currently disabled.');
         }
 
-        $role = Settings::getString('default_user_role', 'user');
+        $role               = Settings::getString('default_user_role', 'user');
+        $requiresModeration = in_array($role, ['admin', 'moderator'], true) ? 0 : 1;
 
         $hash = password_hash($password, PASSWORD_BCRYPT);
         $now  = gmdate('Y-m-d\TH:i:s\Z');
 
         $stmt = $pdo->prepare(
-            'INSERT INTO users (username, password_hash, role, created_at) VALUES (?, ?, ?, ?)'
+            'INSERT INTO users (username, password_hash, role, created_at, requires_moderation) VALUES (?, ?, ?, ?, ?)'
         );
-        $stmt->execute([$username, $hash, $role, $now]);
+        $stmt->execute([$username, $hash, $role, $now, $requiresModeration]);
 
         return self::getById((int)$pdo->lastInsertId());
     }
@@ -98,10 +99,19 @@ final class UserService
     public static function getById(int $id): ?array
     {
         $pdo  = Db::get();
-        $stmt = $pdo->prepare('SELECT id, username, role, bio, created_at, banned_at, ban_reason FROM users WHERE id = ?');
+        $stmt = $pdo->prepare('SELECT id, username, role, bio, created_at, banned_at, ban_reason, requires_moderation FROM users WHERE id = ?');
         $stmt->execute([$id]);
         $row = $stmt->fetch();
         return $row ?: null;
+    }
+
+    public static function setRequiresModeration(int $userId, bool $value): void
+    {
+        Db::get()->prepare('UPDATE users SET requires_moderation = ? WHERE id = ?')
+            ->execute([$value ? 1 : 0, $userId]);
+        if (self::$cachedUser !== null && (int)self::$cachedUser['id'] === $userId) {
+            self::$cachedUser = null;
+        }
     }
 
     /**
@@ -135,7 +145,7 @@ final class UserService
     public static function getByUsername(string $username): ?array
     {
         $pdo  = Db::get();
-        $stmt = $pdo->prepare('SELECT id, username, role, bio, created_at, banned_at FROM users WHERE username = ?');
+        $stmt = $pdo->prepare('SELECT id, username, role, bio, created_at, banned_at, requires_moderation FROM users WHERE username = ?');
         $stmt->execute([$username]);
         $row = $stmt->fetch();
         return $row ?: null;

@@ -135,11 +135,38 @@ final class ThumbService
 
     public static function diagnostics(): array
     {
+        $ffmpeg  = self::findBin('ffmpeg');
+        $ffprobe = self::findBin('ffprobe');
+
+        // Run a quick version check to confirm the binary actually executes
+        $ffmpegVersion  = null;
+        $ffprobeVersion = null;
+        if ($ffmpeg && function_exists('exec')) {
+            exec(escapeshellarg($ffmpeg) . ' -version 2>&1', $out, $code);
+            if ($code === 0 && !empty($out[0])) {
+                $ffmpegVersion = $out[0];
+            }
+        }
+        if ($ffprobe && function_exists('exec')) {
+            exec(escapeshellarg($ffprobe) . ' -version 2>&1', $out, $code);
+            if ($code === 0 && !empty($out[0])) {
+                $ffprobeVersion = $out[0];
+            }
+        }
+
         return [
-            'ffmpeg'  => (bool)self::findBin('ffmpeg'),
-            'ffprobe' => (bool)self::findBin('ffprobe'),
-            'gd'      => function_exists('imagecreatetruecolor'),
-            'gd_webp' => function_exists('imagewebp'),
+            'ffmpeg'          => $ffmpeg !== null,
+            'ffmpeg_path'     => $ffmpeg,
+            'ffmpeg_version'  => $ffmpegVersion,
+            'ffprobe'         => $ffprobe !== null,
+            'ffprobe_path'    => $ffprobe,
+            'ffprobe_version' => $ffprobeVersion,
+            'gd'              => function_exists('imagecreatetruecolor'),
+            'gd_webp'         => function_exists('imagewebp'),
+            'exec_enabled'    => function_exists('exec'),
+            'shell_exec_enabled' => function_exists('shell_exec'),
+            'open_basedir'    => ini_get('open_basedir') ?: null,
+            'bin_path'        => Config::rootPath() . '/bin',
         ];
     }
 
